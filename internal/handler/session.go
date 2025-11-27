@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/myideascope/otherside/internal/service"
 	"github.com/gorilla/mux"
+	"github.com/myideascope/otherside/internal/service"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -359,7 +359,7 @@ func (h *SessionHandler) GetSessionEvents(w http.ResponseWriter, r *http.Request
 
 	// Filter events based on type
 	result := make(map[string]interface{})
-	
+
 	switch eventType {
 	case "evp":
 		result["events"] = summary.EVPs
@@ -413,7 +413,7 @@ func (h *SessionHandler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/v1/sessions/{sessionId}/radar", h.ProcessRadar).Methods("POST")
 	r.HandleFunc("/api/v1/sessions/{sessionId}/sls", h.ProcessSLS).Methods("POST")
 	r.HandleFunc("/api/v1/sessions/{sessionId}/interactions", h.RecordInteraction).Methods("POST")
-	
+
 	// Event retrieval
 	r.HandleFunc("/api/v1/sessions/{sessionId}/events", h.GetSessionEvents).Methods("GET")
 

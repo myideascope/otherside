@@ -82,7 +82,7 @@ func (s *SessionService) ProcessEVPRecording(ctx context.Context, sessionID stri
 	if err != nil {
 		return nil, fmt.Errorf("session not found: %w", err)
 	}
-	
+
 	if session.Status != domain.SessionStatusActive {
 		return nil, fmt.Errorf("session is not active")
 	}
@@ -124,7 +124,7 @@ func (s *SessionService) GenerateVOXCommunication(ctx context.Context, sessionID
 	if err != nil {
 		return nil, fmt.Errorf("session not found: %w", err)
 	}
-	
+
 	// Ensure session is active
 	if session.Status != domain.SessionStatusActive {
 		return nil, fmt.Errorf("session is not active")
@@ -132,10 +132,10 @@ func (s *SessionService) GenerateVOXCommunication(ctx context.Context, sessionID
 
 	// Prepare trigger data for VOX generator
 	triggers := map[string]float64{
-		"emf_anomaly":    triggerData.EMFAnomaly,
-		"audio_anomaly":  triggerData.AudioAnomaly,
-		"temperature":    triggerData.TemperatureFluctuation,
-		"interference":   triggerData.Interference,
+		"emf_anomaly":   triggerData.EMFAnomaly,
+		"audio_anomaly": triggerData.AudioAnomaly,
+		"temperature":   triggerData.TemperatureFluctuation,
+		"interference":  triggerData.Interference,
 	}
 
 	// Generate VOX communication
@@ -183,7 +183,7 @@ func (s *SessionService) ProcessRadarEvent(ctx context.Context, sessionID string
 	if err != nil {
 		return nil, fmt.Errorf("session not found: %w", err)
 	}
-	
+
 	// Ensure session is active
 	if session.Status != domain.SessionStatusActive {
 		return nil, fmt.Errorf("session is not active")
@@ -331,17 +331,17 @@ func (s *SessionService) validateRadarEvent(data RadarEventData) bool {
 	if data.Strength < 0.3 {
 		return false
 	}
-	
+
 	// Validate position data
 	if data.Position.X == 0 && data.Position.Y == 0 {
 		return false
 	}
-	
+
 	// Check for reasonable EMF readings
 	if data.EMFReading < 0 || data.EMFReading > 1000 {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -361,17 +361,17 @@ func (s *SessionService) validateSLSDetection(data SLSDetectionData) bool {
 	if data.Confidence < 0.5 {
 		return false
 	}
-	
+
 	// Minimum number of skeletal points
 	if len(data.SkeletalPoints) < 5 {
 		return false
 	}
-	
+
 	// Validate bounding box
 	if data.BoundingBox.Width < 10 || data.BoundingBox.Height < 10 {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -383,7 +383,7 @@ func (s *SessionService) analyzeMovementPattern(points []domain.SkeletalPoint) d
 			Pattern:   "static",
 		}
 	}
-	
+
 	// Simple movement analysis
 	// In a real implementation, this would be more sophisticated
 	return domain.MovementAnalysis{
@@ -407,7 +407,7 @@ func (s *SessionService) calculateSessionStatistics(
 		TotalSLSDetections: len(slsDetections),
 		TotalInteractions:  len(interactions),
 	}
-	
+
 	// Calculate EVP quality distribution
 	for _, evp := range evps {
 		switch evp.Quality {
@@ -417,7 +417,7 @@ func (s *SessionService) calculateSessionStatistics(
 			stats.MediumQualityEVPs++
 		}
 	}
-	
+
 	// Calculate average anomaly strength
 	if len(evps) > 0 {
 		var totalStrength float64
@@ -426,7 +426,7 @@ func (s *SessionService) calculateSessionStatistics(
 		}
 		stats.AverageAnomalyStrength = totalStrength / float64(len(evps))
 	}
-	
+
 	return stats
 }
 
@@ -438,9 +438,9 @@ func generateID() string {
 // Request/Response types
 
 type CreateSessionRequest struct {
-	Title         string              `json:"title"`
-	Location      domain.Location     `json:"location"`
-	Notes         string              `json:"notes"`
+	Title         string               `json:"title"`
+	Location      domain.Location      `json:"location"`
+	Notes         string               `json:"notes"`
 	Environmental domain.Environmental `json:"environmental"`
 }
 
@@ -450,12 +450,12 @@ type EVPMetadata struct {
 }
 
 type VOXTriggerData struct {
-	EMFAnomaly              float64 `json:"emf_anomaly"`
-	AudioAnomaly            float64 `json:"audio_anomaly"`
-	TemperatureFluctuation  float64 `json:"temperature_fluctuation"`
-	Interference            float64 `json:"interference"`
-	LanguagePack            string  `json:"language_pack"`
-	PhoneticBankSize        int     `json:"phonetic_bank_size"`
+	EMFAnomaly             float64 `json:"emf_anomaly"`
+	AudioAnomaly           float64 `json:"audio_anomaly"`
+	TemperatureFluctuation float64 `json:"temperature_fluctuation"`
+	Interference           float64 `json:"interference"`
+	LanguagePack           string  `json:"language_pack"`
+	PhoneticBankSize       int     `json:"phonetic_bank_size"`
 }
 
 type RadarEventData struct {
@@ -468,40 +468,40 @@ type RadarEventData struct {
 }
 
 type SLSDetectionData struct {
-	SkeletalPoints  []domain.SkeletalPoint `json:"skeletal_points"`
-	Confidence      float64                `json:"confidence"`
-	BoundingBox     domain.BoundingBox     `json:"bounding_box"`
-	VideoFrame      string                 `json:"video_frame"`
-	FiltersApplied  []string               `json:"filters_applied"`
-	Duration        float64                `json:"duration"`
+	SkeletalPoints []domain.SkeletalPoint `json:"skeletal_points"`
+	Confidence     float64                `json:"confidence"`
+	BoundingBox    domain.BoundingBox     `json:"bounding_box"`
+	VideoFrame     string                 `json:"video_frame"`
+	FiltersApplied []string               `json:"filters_applied"`
+	Duration       float64                `json:"duration"`
 }
 
 type UserInteractionData struct {
-	Type             domain.InteractionType     `json:"type"`
-	Content          string                     `json:"content"`
-	AudioPath        string                     `json:"audio_path,omitempty"`
-	Response         string                     `json:"response,omitempty"`
-	ResponseTime     float64                    `json:"response_time,omitempty"`
-	RandomizerResult *domain.RandomizerResult   `json:"randomizer_result,omitempty"`
+	Type             domain.InteractionType   `json:"type"`
+	Content          string                   `json:"content"`
+	AudioPath        string                   `json:"audio_path,omitempty"`
+	Response         string                   `json:"response,omitempty"`
+	ResponseTime     float64                  `json:"response_time,omitempty"`
+	RandomizerResult *domain.RandomizerResult `json:"randomizer_result,omitempty"`
 }
 
 type SessionSummary struct {
-	Session       *domain.Session            `json:"session"`
-	EVPs          []*domain.EVPRecording     `json:"evps"`
-	VOXEvents     []*domain.VOXEvent         `json:"vox_events"`
-	RadarEvents   []*domain.RadarEvent       `json:"radar_events"`
-	SLSDetections []*domain.SLSDetection     `json:"sls_detections"`
-	Interactions  []*domain.UserInteraction  `json:"interactions"`
-	Statistics    SessionStatistics          `json:"statistics"`
+	Session       *domain.Session           `json:"session"`
+	EVPs          []*domain.EVPRecording    `json:"evps"`
+	VOXEvents     []*domain.VOXEvent        `json:"vox_events"`
+	RadarEvents   []*domain.RadarEvent      `json:"radar_events"`
+	SLSDetections []*domain.SLSDetection    `json:"sls_detections"`
+	Interactions  []*domain.UserInteraction `json:"interactions"`
+	Statistics    SessionStatistics         `json:"statistics"`
 }
 
 type SessionStatistics struct {
-	TotalEVPs               int     `json:"total_evps"`
-	TotalVOXEvents          int     `json:"total_vox_events"`
-	TotalRadarEvents        int     `json:"total_radar_events"`
-	TotalSLSDetections      int     `json:"total_sls_detections"`
-	TotalInteractions       int     `json:"total_interactions"`
-	HighQualityEVPs         int     `json:"high_quality_evps"`
-	MediumQualityEVPs       int     `json:"medium_quality_evps"`
-	AverageAnomalyStrength  float64 `json:"average_anomaly_strength"`
+	TotalEVPs              int     `json:"total_evps"`
+	TotalVOXEvents         int     `json:"total_vox_events"`
+	TotalRadarEvents       int     `json:"total_radar_events"`
+	TotalSLSDetections     int     `json:"total_sls_detections"`
+	TotalInteractions      int     `json:"total_interactions"`
+	HighQualityEVPs        int     `json:"high_quality_evps"`
+	MediumQualityEVPs      int     `json:"medium_quality_evps"`
+	AverageAnomalyStrength float64 `json:"average_anomaly_strength"`
 }

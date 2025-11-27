@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/myideascope/otherside/internal/domain"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/myideascope/otherside/internal/domain"
 )
 
 // SQLiteSessionRepository implements SessionRepository using SQLite

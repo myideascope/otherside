@@ -42,8 +42,8 @@ type AudioConfig struct {
 
 // StorageConfig holds storage configuration
 type StorageConfig struct {
-	DataPath     string
-	MaxSizeGB    int
+	DataPath      string
+	MaxSizeGB     int
 	RetentionDays int
 }
 

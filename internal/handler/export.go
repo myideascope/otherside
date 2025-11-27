@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/myideascope/otherside/internal/service"
 	"github.com/gorilla/mux"
+	"github.com/myideascope/otherside/internal/service"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -97,12 +97,12 @@ func (h *ExportHandler) DownloadExport(w http.ResponseWriter, r *http.Request) {
 	// For now, return a placeholder response
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
 	w.Header().Set("Content-Type", "application/octet-stream")
-	
+
 	// In a real implementation, you would:
 	// 1. Check if file exists in storage
 	// 2. Stream the file to the response
 	// 3. Handle appropriate content types
-	
+
 	http.Error(w, "Export download not yet implemented", http.StatusNotImplemented)
 }
 

@@ -12,7 +12,7 @@ type Session struct {
 	StartTime     time.Time         `json:"start_time" db:"start_time"`
 	EndTime       *time.Time        `json:"end_time,omitempty" db:"end_time"`
 	Notes         string            `json:"notes" db:"notes"`
-	Environmental Environmental    `json:"environmental" db:"environmental"`
+	Environmental Environmental     `json:"environmental" db:"environmental"`
 	Status        SessionStatus     `json:"status" db:"status"`
 	CreatedAt     time.Time         `json:"created_at" db:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at" db:"updated_at"`
@@ -79,62 +79,62 @@ const (
 
 // VOXEvent represents a Voice Synthesis (VOX) communication event
 type VOXEvent struct {
-	ID               string    `json:"id" db:"id"`
-	SessionID        string    `json:"session_id" db:"session_id"`
-	Timestamp        time.Time `json:"timestamp" db:"timestamp"`
-	GeneratedText    string    `json:"generated_text" db:"generated_text"`
-	PhoneticBank     string    `json:"phonetic_bank" db:"phonetic_bank"`
-	FrequencyData    []float64 `json:"frequency_data" db:"frequency_data"`
-	TriggerStrength  float64   `json:"trigger_strength" db:"trigger_strength"`
-	LanguagePack     string    `json:"language_pack" db:"language_pack"`
-	ModulationType   string    `json:"modulation_type" db:"modulation_type"`
-	UserResponse     string    `json:"user_response,omitempty" db:"user_response"`
-	ResponseDelay    float64   `json:"response_delay,omitempty" db:"response_delay"`
-	CreatedAt        time.Time `json:"created_at" db:"created_at"`
+	ID              string    `json:"id" db:"id"`
+	SessionID       string    `json:"session_id" db:"session_id"`
+	Timestamp       time.Time `json:"timestamp" db:"timestamp"`
+	GeneratedText   string    `json:"generated_text" db:"generated_text"`
+	PhoneticBank    string    `json:"phonetic_bank" db:"phonetic_bank"`
+	FrequencyData   []float64 `json:"frequency_data" db:"frequency_data"`
+	TriggerStrength float64   `json:"trigger_strength" db:"trigger_strength"`
+	LanguagePack    string    `json:"language_pack" db:"language_pack"`
+	ModulationType  string    `json:"modulation_type" db:"modulation_type"`
+	UserResponse    string    `json:"user_response,omitempty" db:"user_response"`
+	ResponseDelay   float64   `json:"response_delay,omitempty" db:"response_delay"`
+	CreatedAt       time.Time `json:"created_at" db:"created_at"`
 }
 
 // RadarEvent represents a radar detection event
 type RadarEvent struct {
-	ID            string      `json:"id" db:"id"`
-	SessionID     string      `json:"session_id" db:"session_id"`
-	Timestamp     time.Time   `json:"timestamp" db:"timestamp"`
-	Position      Coordinates `json:"position" db:"position"`
-	Strength      float64     `json:"strength" db:"strength"`
-	SourceType    SourceType  `json:"source_type" db:"source_type"`
-	EMFReading    float64     `json:"emf_reading" db:"emf_reading"`
-	AudioAnomaly  float64     `json:"audio_anomaly" db:"audio_anomaly"`
-	Duration      float64     `json:"duration" db:"duration"`
+	ID            string        `json:"id" db:"id"`
+	SessionID     string        `json:"session_id" db:"session_id"`
+	Timestamp     time.Time     `json:"timestamp" db:"timestamp"`
+	Position      Coordinates   `json:"position" db:"position"`
+	Strength      float64       `json:"strength" db:"strength"`
+	SourceType    SourceType    `json:"source_type" db:"source_type"`
+	EMFReading    float64       `json:"emf_reading" db:"emf_reading"`
+	AudioAnomaly  float64       `json:"audio_anomaly" db:"audio_anomaly"`
+	Duration      float64       `json:"duration" db:"duration"`
 	MovementTrail []Coordinates `json:"movement_trail,omitempty" db:"movement_trail"`
-	CreatedAt     time.Time   `json:"created_at" db:"created_at"`
+	CreatedAt     time.Time     `json:"created_at" db:"created_at"`
 }
 
 // SLSDetection represents Structured Light Sensor detection data
 type SLSDetection struct {
-	ID             string            `json:"id" db:"id"`
-	SessionID      string            `json:"session_id" db:"session_id"`
-	Timestamp      time.Time         `json:"timestamp" db:"timestamp"`
-	SkeletalPoints []SkeletalPoint   `json:"skeletal_points" db:"skeletal_points"`
-	Confidence     float64           `json:"confidence" db:"confidence"`
-	BoundingBox    BoundingBox       `json:"bounding_box" db:"bounding_box"`
-	VideoFrame     string            `json:"video_frame,omitempty" db:"video_frame"`
-	FilterApplied  []string          `json:"filter_applied" db:"filter_applied"`
-	Duration       float64           `json:"duration" db:"duration"`
-	Movement       MovementAnalysis  `json:"movement" db:"movement"`
-	CreatedAt      time.Time         `json:"created_at" db:"created_at"`
+	ID             string           `json:"id" db:"id"`
+	SessionID      string           `json:"session_id" db:"session_id"`
+	Timestamp      time.Time        `json:"timestamp" db:"timestamp"`
+	SkeletalPoints []SkeletalPoint  `json:"skeletal_points" db:"skeletal_points"`
+	Confidence     float64          `json:"confidence" db:"confidence"`
+	BoundingBox    BoundingBox      `json:"bounding_box" db:"bounding_box"`
+	VideoFrame     string           `json:"video_frame,omitempty" db:"video_frame"`
+	FilterApplied  []string         `json:"filter_applied" db:"filter_applied"`
+	Duration       float64          `json:"duration" db:"duration"`
+	Movement       MovementAnalysis `json:"movement" db:"movement"`
+	CreatedAt      time.Time        `json:"created_at" db:"created_at"`
 }
 
 // UserInteraction represents user interactions during investigation
 type UserInteraction struct {
-	ID            string             `json:"id" db:"id"`
-	SessionID     string             `json:"session_id" db:"session_id"`
-	Timestamp     time.Time          `json:"timestamp" db:"timestamp"`
-	Type          InteractionType    `json:"type" db:"type"`
-	Content       string             `json:"content" db:"content"`
-	AudioPath     string             `json:"audio_path,omitempty" db:"audio_path"`
-	Response      string             `json:"response,omitempty" db:"response"`
-	ResponseTime  float64            `json:"response_time,omitempty" db:"response_time"`
+	ID               string            `json:"id" db:"id"`
+	SessionID        string            `json:"session_id" db:"session_id"`
+	Timestamp        time.Time         `json:"timestamp" db:"timestamp"`
+	Type             InteractionType   `json:"type" db:"type"`
+	Content          string            `json:"content" db:"content"`
+	AudioPath        string            `json:"audio_path,omitempty" db:"audio_path"`
+	Response         string            `json:"response,omitempty" db:"response"`
+	ResponseTime     float64           `json:"response_time,omitempty" db:"response_time"`
 	RandomizerResult *RandomizerResult `json:"randomizer_result,omitempty" db:"randomizer_result"`
-	CreatedAt     time.Time          `json:"created_at" db:"created_at"`
+	CreatedAt        time.Time         `json:"created_at" db:"created_at"`
 }
 
 // Supporting types
