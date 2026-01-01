@@ -537,7 +537,6 @@ func (s *ExportService) addAudioFilesToZip(ctx context.Context, zipWriter *zip.W
 
 	for _, evp := range evps {
 		if evp.FilePath != "" {
-			// Read audio file from storage
 			audioData, err := s.fileRepo.GetFile(ctx, evp.FilePath)
 			if err != nil {
 				// Log error but continue with other files
