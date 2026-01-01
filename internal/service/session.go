@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/myideascope/otherside/internal/domain"
@@ -384,12 +387,81 @@ func (s *SessionService) analyzeMovementPattern(points []domain.SkeletalPoint) d
 		}
 	}
 
-	// Simple movement analysis
-	// In a real implementation, this would be more sophisticated
+	// Calculate total distance and direction changes
+	var totalDistance float64
+	var directionAngles []float64
+
+	for i := 1; i < len(points); i++ {
+		prev := points[i-1].Position
+		curr := points[i].Position
+
+		// Calculate 3D distance
+		dx := curr.X - prev.X
+		dy := curr.Y - prev.Y
+		dz := curr.Z - prev.Z
+		distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
+		totalDistance += distance
+
+		// Calculate direction angle in 2D (X-Y plane)
+		angle := math.Atan2(dy, dx)
+		if angle < 0 {
+			angle += 2 * math.Pi
+		}
+		directionAngles = append(directionAngles, angle)
+	}
+
+	// Calculate average speed (distance per unit time, assuming points are evenly spaced)
+	timeIntervals := float64(len(points) - 1)
+	avgSpeed := totalDistance / timeIntervals
+
+	// Calculate predominant direction
+	var avgDirection float64
+	if len(directionAngles) > 0 {
+		var sumX, sumY float64
+		for _, angle := range directionAngles {
+			sumX += math.Cos(angle)
+			sumY += math.Sin(angle)
+		}
+		avgDirection = math.Atan2(sumY, sumX)
+		if avgDirection < 0 {
+			avgDirection += 2 * math.Pi
+		}
+	}
+
+	// Determine movement pattern
+	pattern := "unknown"
+	if avgSpeed < 0.1 {
+		pattern = "static"
+	} else if len(directionAngles) > 2 {
+		// Check if movement is linear or erratic
+		var directionVariance float64
+		if len(directionAngles) > 1 {
+			mean := avgDirection
+			for _, angle := range directionAngles {
+				diff := angle - mean
+				if diff > math.Pi {
+					diff -= 2 * math.Pi
+				} else if diff < -math.Pi {
+					diff += 2 * math.Pi
+				}
+				directionVariance += diff * diff
+			}
+			directionVariance /= float64(len(directionAngles))
+		}
+
+		if directionVariance < 0.5 {
+			pattern = "linear"
+		} else if directionVariance > 2.0 {
+			pattern = "erratic"
+		} else {
+			pattern = "curved"
+		}
+	}
+
 	return domain.MovementAnalysis{
-		Speed:     0.5, // Placeholder
-		Direction: 0,   // Placeholder
-		Pattern:   "unknown",
+		Speed:     avgSpeed,
+		Direction: avgDirection,
+		Pattern:   pattern,
 	}
 }
 
@@ -430,9 +502,14 @@ func (s *SessionService) calculateSessionStatistics(
 	return stats
 }
 
-// generateID generates a unique ID (simplified implementation)
+// generateID generates a unique ID using crypto/rand
 func generateID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback to timestamp if crypto/rand fails
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(bytes)
 }
 
 // Request/Response types
