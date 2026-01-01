@@ -1,0 +1,24 @@
+{
+  "database": {
+    "driver": "sqlite3",
+    "test_path": ":memory:"
+  },
+  "audio": {
+    "sample_rate": 44100,
+    "bit_depth": 16,
+    "channels": 1,
+    "buffer_size": 1024
+  },
+  "server": {
+    "test_port": "8081",
+    "timeout": "30s"
+  },
+  "session": {
+    "default_duration": "2h",
+    "max_file_size": "100MB"
+  },
+  "logging": {
+    "level": "debug",
+    "format": "text"
+  }
+}
