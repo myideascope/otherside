@@ -110,7 +110,7 @@ func (s *ExportService) ExportSessions(ctx context.Context, req ExportRequest) (
 	case ExportFormatCSV:
 		exportData, filename, err = s.exportAsCSV(sessionData, req)
 	case ExportFormatZIP:
-		exportData, filename, err = s.exportAsZIP(sessionData, req)
+		exportData, filename, err = s.exportAsZIP(ctx, sessionData, req)
 	default:
 		return nil, fmt.Errorf("unsupported export format: %s", req.Format)
 	}
@@ -297,7 +297,7 @@ func (s *ExportService) exportAsCSV(sessionData map[string]*SessionExportData, r
 	return buf.Bytes(), filename, nil
 }
 
-func (s *ExportService) exportAsZIP(sessionData map[string]*SessionExportData, req ExportRequest) ([]byte, string, error) {
+func (s *ExportService) exportAsZIP(ctx context.Context, sessionData map[string]*SessionExportData, req ExportRequest) ([]byte, string, error) {
 	var buf bytes.Buffer
 	zipWriter := zip.NewWriter(&buf)
 	defer zipWriter.Close()
@@ -337,7 +337,7 @@ func (s *ExportService) exportAsZIP(sessionData map[string]*SessionExportData, r
 
 		// Add audio files if requested and available
 		if req.IncludeAudio {
-			s.addAudioFilesToZip(zipWriter, sessionDir, data.EVPs)
+			s.addAudioFilesToZip(ctx, zipWriter, sessionDir, data.EVPs)
 		}
 	}
 
@@ -532,11 +532,42 @@ func (s *ExportService) writeInteractionsCSV(writer *csv.Writer, sessionData map
 	return nil
 }
 
-func (s *ExportService) addAudioFilesToZip(zipWriter *zip.Writer, sessionDir string, evps []*domain.EVPRecording) {
+func (s *ExportService) addAudioFilesToZip(ctx context.Context, zipWriter *zip.Writer, sessionDir string, evps []*domain.EVPRecording) {
+	audioDir := sessionDir + "audio/"
+
 	for _, evp := range evps {
 		if evp.FilePath != "" {
-			// This would copy actual audio files to the ZIP
-			// Implementation depends on file storage system
+			// Read the audio file from storage
+			audioData, err := s.fileRepo.GetFile(ctx, evp.FilePath)
+			if err != nil {
+				// Log error but continue with other files
+				continue
+			}
+
+			// Create filename based on EVP ID and original extension
+			filename := fmt.Sprintf("evp_%s%s", evp.ID, filepath.Ext(evp.FilePath))
+			if filename == "evp_"+evp.ID {
+				filename += ".wav" // Default extension if none found
+			}
+
+			// Create file in ZIP
+			audioFile, err := zipWriter.Create(audioDir + filename)
+			if err != nil {
+				continue
+			}
+
+			// Write audio data to ZIP
+			audioFile.Write(audioData)
+
+			// Also add processed audio if available
+			if evp.ProcessedPath != "" {
+				processedData, err := s.fileRepo.GetFile(ctx, evp.ProcessedPath)
+				if err == nil {
+					processedFilename := fmt.Sprintf("evp_%s_processed%s", evp.ID, filepath.Ext(evp.ProcessedPath))
+					processedFile, _ := zipWriter.Create(audioDir + processedFilename)
+					processedFile.Write(processedData)
+				}
+			}
 		}
 	}
 }
