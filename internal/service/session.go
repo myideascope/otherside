@@ -312,6 +312,16 @@ func (s *SessionService) GetSessionSummary(ctx context.Context, sessionID string
 	}, nil
 }
 
+// GetAllSessions returns all sessions with pagination
+func (s *SessionService) GetAllSessions(ctx context.Context, limit, offset int) ([]*domain.Session, error) {
+	return s.sessionRepo.GetAll(ctx, limit, offset)
+}
+
+// GetSessionsByStatus returns sessions filtered by status with pagination
+func (s *SessionService) GetSessionsByStatus(ctx context.Context, status domain.SessionStatus, limit, offset int) ([]*domain.Session, error) {
+	return s.sessionRepo.GetByStatus(ctx, status)
+}
+
 // Helper methods
 
 func (s *SessionService) determineEVPQuality(result *audio.ProcessingResult) domain.EVPQuality {
