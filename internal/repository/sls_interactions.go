@@ -4,10 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"io/ioutil"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/myideascope/otherside/internal/domain"
 )
@@ -482,7 +483,7 @@ func (r *SQLiteFileRepository) SaveFile(ctx context.Context, path string, data [
 	}
 
 	// Write file
-	if err := ioutil.WriteFile(fullPath, data, 0644); err != nil {
+	if err := os.WriteFile(fullPath, data, 0644); err != nil {
 		return err
 	}
 
@@ -491,7 +492,18 @@ func (r *SQLiteFileRepository) SaveFile(ctx context.Context, path string, data [
 		INSERT INTO files (id, session_id, file_path, file_type, file_size, mime_type, created_at)
 		VALUES (?, '', ?, 'user_file', ?, '', datetime('now'))`
 
-	id := strconv.FormatInt(ctx.Value("timestamp").(int64), 10)
+	// Generate safe file ID with fallback to current time
+	var id string
+	if timestamp := ctx.Value("timestamp"); timestamp != nil {
+		if ts, ok := timestamp.(int64); ok {
+			id = strconv.FormatInt(ts, 10)
+		} else {
+			id = strconv.FormatInt(time.Now().Unix(), 10)
+		}
+	} else {
+		id = strconv.FormatInt(time.Now().Unix(), 10)
+	}
+
 	_, err := r.db.ExecContext(ctx, query, id, path, len(data))
 	return err
 }
@@ -499,7 +511,7 @@ func (r *SQLiteFileRepository) SaveFile(ctx context.Context, path string, data [
 // GetFile retrieves a file from the filesystem
 func (r *SQLiteFileRepository) GetFile(ctx context.Context, path string) ([]byte, error) {
 	fullPath := filepath.Join(r.basePath, path)
-	return ioutil.ReadFile(fullPath)
+	return os.ReadFile(fullPath)
 }
 
 // DeleteFile deletes a file from filesystem and database
@@ -520,11 +532,17 @@ func (r *SQLiteFileRepository) DeleteFile(ctx context.Context, path string) erro
 // FileExists checks if a file exists
 func (r *SQLiteFileRepository) FileExists(ctx context.Context, path string) (bool, error) {
 	fullPath := filepath.Join(r.basePath, path)
-	_, err := os.Stat(fullPath)
-	if os.IsNotExist(err) {
-		return false, nil
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if os.IsPermission(err) {
+			return false, fmt.Errorf("permission denied accessing file: %w", err)
+		}
+		return false, fmt.Errorf("failed to check file existence: %w", err)
 	}
-	return err == nil, err
+	return !info.IsDir(), nil
 }
 
 // GetFileSize returns the size of a file
@@ -541,15 +559,15 @@ func (r *SQLiteFileRepository) GetFileSize(ctx context.Context, path string) (in
 func (r *SQLiteFileRepository) ListFiles(ctx context.Context, directory string) ([]string, error) {
 	fullPath := filepath.Join(r.basePath, directory)
 
-	files, err := ioutil.ReadDir(fullPath)
+	entries, err := os.ReadDir(fullPath)
 	if err != nil {
 		return nil, err
 	}
 
 	var fileNames []string
-	for _, file := range files {
-		if !file.IsDir() {
-			fileNames = append(fileNames, file.Name())
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			fileNames = append(fileNames, entry.Name())
 		}
 	}
 
