@@ -54,6 +54,9 @@ class OtherSideApp {
                 this.slsDetector = new SLSDetector(this);
             }
             
+            // Initialize VOX communication
+            this.initializeVOX();
+            
             // Hide loading screen
             setTimeout(() => {
                 const loadingScreen = document.getElementById('loading');
@@ -186,6 +189,14 @@ class OtherSideApp {
         
         this.currentView = view;
         
+        // Stop VOX monitoring when leaving investigation view
+        if (view !== 'investigate') {
+            this.stopVOXMonitoring();
+        } else if (this.activeSession && this.activeSession.status === 'active') {
+            // Restart VOX monitoring when entering investigation view
+            this.startVOXMonitoring();
+        }
+        
         // Load view-specific data
         if (view === 'analysis') {
             this.populateAnalysisSessionSelect();
@@ -248,6 +259,7 @@ class OtherSideApp {
                 this.handleNavigation('investigate');
                 this.updateActiveSessionInfo();
                 this.startSessionTimer();
+                this.startVOXMonitoring();
                 this.addLogEntry(`Session "${sessionData.title}" started`, 'system');
                 
                 // Refresh sessions list
@@ -359,6 +371,7 @@ class OtherSideApp {
                 
                 if (session.session.status === 'active') {
                     this.startSessionTimer();
+                    this.startVOXMonitoring();
                 }
                 
                 this.showAlert(`Session "${session.session.title}" selected`, 'info');
@@ -1019,6 +1032,358 @@ class OtherSideApp {
                     alert.parentNode.removeChild(alert);
                 }
             }, 300);
+        }
+    }
+
+    // VOX Communication Methods
+    async initializeVOX() {
+        // Setup VOX event listeners
+        const voxTriggerBtn = document.getElementById('voxTriggerBtn');
+        const voxClearBtn = document.getElementById('voxClearBtn');
+        const voxLanguage = document.getElementById('voxLanguage');
+        const voxBank = document.getElementById('voxBank');
+
+        if (voxTriggerBtn) {
+            voxTriggerBtn.addEventListener('click', this.handleVOXTrigger.bind(this));
+        }
+
+        if (voxClearBtn) {
+            voxClearBtn.addEventListener('click', this.clearVOXDisplay.bind(this));
+        }
+
+        if (voxLanguage) {
+            voxLanguage.addEventListener('change', this.updateVOXConfig.bind(this));
+        }
+
+        if (voxBank) {
+            voxBank.addEventListener('change', this.updateVOXConfig.bind(this));
+        }
+
+        // Start VOX monitoring if there's an active session
+        if (this.activeSession) {
+            this.startVOXMonitoring();
+        }
+    }
+
+    async handleVOXTrigger() {
+        if (!this.activeSession) {
+            this.showAlert('No active session. Please start a session first.', 'error');
+            return;
+        }
+
+        try {
+            const triggerData = this.collectVOXTriggerData();
+            const voxEvent = await this.generateVOXCommunication(triggerData);
+            
+            if (voxEvent) {
+                this.displayVOXEvent(voxEvent);
+                this.addLogEntry(`VOX Communication: "${voxEvent.generated_text}" (Strength: ${(voxEvent.trigger_strength * 100).toFixed(1)}%)`, 'vox');
+            } else {
+                this.showAlert('Insufficient trigger strength for VOX generation', 'info');
+            }
+
+        } catch (error) {
+            console.error('VOX trigger failed:', error);
+            this.showAlert('VOX communication failed', 'error');
+        }
+    }
+
+    collectVOXTriggerData() {
+        // Collect environmental trigger data
+        const emfLevel = this.radarDetector ? this.radarDetector.emfLevel : 0;
+        const audioAnomalies = this.radarDetector ? this.radarDetector.audioAnomalies : 0;
+        
+        // Get current language and bank settings
+        const language = document.getElementById('voxLanguage')?.value || 'english';
+        const bankSize = this.getPhoneticBankSize();
+
+        return {
+            emf_anomaly: Math.min(emfLevel / 100, 1.0), // Normalize to 0-1
+            audio_anomaly: Math.min(audioAnomalies / 10, 1.0), // Normalize to 0-1
+            temperature_fluctuation: 0.1, // Could be enhanced with real sensor data
+            interference: 0.05, // Could be calculated from environmental noise
+            language_pack: language,
+            phonetic_bank_size: bankSize
+        };
+    }
+
+    getPhoneticBankSize() {
+        const voxBank = document.getElementById('voxBank')?.value || 'standard';
+        switch (voxBank) {
+            case 'minimal': return 11;
+            case 'standard': return 27;
+            case 'extended': return 37;
+            default: return 27;
+        }
+    }
+
+    async generateVOXCommunication(triggerData) {
+        try {
+            const response = await fetch(
+                `${this.apiBaseUrl}/sessions/${this.activeSession.id}/vox`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(triggerData)
+                }
+            );
+
+            if (response.status === 204) {
+                return null; // No VOX generated due to insufficient trigger strength
+            }
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const voxEvent = await response.json();
+            
+            // Add to current session data
+            this.currentSessionData.voxEvents.push(voxEvent);
+            
+            return voxEvent;
+
+        } catch (error) {
+            if (this.isOnline) {
+                throw error; // Re-throw if online and request failed
+            }
+            
+            // Offline fallback - generate mock VOX event
+            return this.generateOfflineVOX(triggerData);
+        }
+    }
+
+    generateOfflineVOX(triggerData) {
+        // Simple offline VOX generation
+        const triggerStrength = this.calculateOfflineTriggerStrength(triggerData);
+        
+        if (triggerStrength < 0.3) {
+            return null;
+        }
+
+        const mockTexts = {
+            english: ['help', 'here', 'see', 'yes', 'cold', 'leave'],
+            simple: ['yes', 'no', 'help', 'go']
+        };
+
+        const language = triggerData.language_pack || 'english';
+        const texts = mockTexts[language] || mockTexts.english;
+        const generatedText = texts[Math.floor(Math.random() * texts.length)];
+
+        const voxEvent = {
+            id: `offline_${Date.now()}`,
+            session_id: this.activeSession.id,
+            timestamp: new Date().toISOString(),
+            generated_text: generatedText,
+            phonetic_bank: 'minimal',
+            frequency_data: [],
+            trigger_strength: triggerStrength,
+            language_pack: language,
+            modulation_type: 'amplitude',
+            user_response: null,
+            response_delay: null,
+            created_at: new Date().toISOString()
+        };
+
+        // Save offline for later sync
+        if (window.offlineManager) {
+            window.offlineManager.saveOfflineVOX(this.activeSession.id, voxEvent);
+        }
+
+        return voxEvent;
+    }
+
+    calculateOfflineTriggerStrength(triggerData) {
+        const weights = {
+            emf_anomaly: 0.3,
+            audio_anomaly: 0.4,
+            temperature_fluctuation: 0.1,
+            interference: 0.2
+        };
+
+        let totalStrength = 0;
+        for (const [key, value] of Object.entries(triggerData)) {
+            if (typeof value === 'number' && weights[key]) {
+                totalStrength += value * weights[key];
+            }
+        }
+
+        return Math.min(totalStrength, 1.0);
+    }
+
+    displayVOXEvent(voxEvent) {
+        const voxOutput = document.getElementById('voxOutput');
+        const triggerStrengthBar = document.getElementById('triggerStrengthBar');
+        const triggerStrengthValue = document.getElementById('triggerStrengthValue');
+
+        if (voxOutput) {
+            voxOutput.innerHTML = `
+                <div class="vox-communication">
+                    <div class="vox-text">"${voxEvent.generated_text}"</div>
+                    <div class="vox-meta">
+                        <span>Language: ${voxEvent.language_pack}</span>
+                        <span>Bank: ${voxEvent.phonetic_bank}</span>
+                        <span>Time: ${new Date(voxEvent.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <div class="vox-response-section">
+                        <input type="text" class="vox-response-input" placeholder="Enter your response..." 
+                               data-vox-id="${voxEvent.id}" />
+                        <button class="btn btn-sm btn-primary vox-response-btn" 
+                                data-vox-id="${voxEvent.id}">Respond</button>
+                    </div>
+                </div>
+            `;
+
+            // Add response event listeners
+            const responseBtn = voxOutput.querySelector('.vox-response-btn');
+            const responseInput = voxOutput.querySelector('.vox-response-input');
+
+            if (responseBtn && responseInput) {
+                responseBtn.addEventListener('click', () => {
+                    this.handleVOXResponse(voxEvent.id, responseInput.value);
+                });
+
+                responseInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        this.handleVOXResponse(voxEvent.id, e.target.value);
+                    }
+                });
+            }
+        }
+
+        if (triggerStrengthBar && triggerStrengthValue) {
+            const strengthPercent = voxEvent.trigger_strength * 100;
+            triggerStrengthBar.style.width = `${strengthPercent}%`;
+            triggerStrengthValue.textContent = `${strengthPercent.toFixed(1)}%`;
+        }
+    }
+
+    async handleVOXResponse(voxId, response) {
+        if (!response || !response.trim()) {
+            this.showAlert('Please enter a response', 'info');
+            return;
+        }
+
+        try {
+            const responseTime = Date.now(); // Simple timing - could be enhanced
+            const voxEvent = this.currentSessionData.voxEvents.find(v => v.id === voxId);
+            
+            if (voxEvent) {
+                voxEvent.user_response = response.trim();
+                voxEvent.response_delay = 1.0; // Placeholder - could calculate actual delay
+
+                // Update backend if online
+                if (this.isOnline) {
+                    await this.updateVOXEvent(voxId, {
+                        user_response: response.trim(),
+                        response_delay: voxEvent.response_delay
+                    });
+                } else {
+                    // Save offline for later sync
+                    if (window.offlineManager) {
+                        window.offlineManager.saveOfflineVOX(this.activeSession.id, voxEvent);
+                    }
+                }
+
+                // Update UI
+                const responseSection = document.querySelector(`[data-vox-id="${voxId}"]`).closest('.vox-response-section');
+                if (responseSection) {
+                    responseSection.innerHTML = `
+                        <div class="vox-response-recorded">
+                            <strong>Your Response:</strong> ${response.trim()}
+                            <span class="response-time">(${voxEvent.response_delay.toFixed(1)}s)</span>
+                        </div>
+                    `;
+                }
+
+                this.addLogEntry(`VOX Response recorded: "${response.trim()}"`, 'vox');
+            }
+
+        } catch (error) {
+            console.error('Failed to save VOX response:', error);
+            this.showAlert('Failed to save response', 'error');
+        }
+    }
+
+    async updateVOXEvent(voxId, updateData) {
+        try {
+            const response = await fetch(
+                `${this.apiBaseUrl}/vox/${voxId}`,
+                {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(updateData)
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+        } catch (error) {
+            console.error('Failed to update VOX event:', error);
+            throw error;
+        }
+    }
+
+    clearVOXDisplay() {
+        const voxOutput = document.getElementById('voxOutput');
+        const triggerStrengthBar = document.getElementById('triggerStrengthBar');
+        const triggerStrengthValue = document.getElementById('triggerStrengthValue');
+
+        if (voxOutput) {
+            voxOutput.innerHTML = '<p class="vox-placeholder">Waiting for communication...</p>';
+        }
+
+        if (triggerStrengthBar && triggerStrengthValue) {
+            triggerStrengthBar.style.width = '0%';
+            triggerStrengthValue.textContent = '0%';
+        }
+
+        this.addLogEntry('VOX display cleared', 'vox');
+    }
+
+    updateVOXConfig() {
+        const language = document.getElementById('voxLanguage')?.value || 'english';
+        const bank = document.getElementById('voxBank')?.value || 'standard';
+        
+        this.addLogEntry(`VOX configuration updated: ${language} language, ${bank} bank`, 'vox');
+    }
+
+    startVOXMonitoring() {
+        if (!this.activeSession) return;
+
+        // Monitor environmental changes for automatic VOX triggers
+        this.voxMonitoringInterval = setInterval(() => {
+            const triggerData = this.collectVOXTriggerData();
+            const triggerStrength = this.calculateOfflineTriggerStrength(triggerData);
+
+            // Update trigger strength display
+            const triggerStrengthBar = document.getElementById('triggerStrengthBar');
+            const triggerStrengthValue = document.getElementById('triggerStrengthValue');
+
+            if (triggerStrengthBar && triggerStrengthValue) {
+                const strengthPercent = triggerStrength * 100;
+                triggerStrengthBar.style.width = `${strengthPercent}%`;
+                triggerStrengthValue.textContent = `${strengthPercent.toFixed(1)}%`;
+            }
+
+            // Auto-trigger if strength is high enough
+            if (triggerStrength > 0.7 && Math.random() < 0.1) { // 10% chance when strength is high
+                this.handleVOXTrigger();
+            }
+
+        }, 2000); // Check every 2 seconds
+    }
+
+    stopVOXMonitoring() {
+        if (this.voxMonitoringInterval) {
+            clearInterval(this.voxMonitoringInterval);
+            this.voxMonitoringInterval = null;
         }
     }
 }

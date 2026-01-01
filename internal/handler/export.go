@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -74,7 +75,7 @@ func (h *ExportHandler) ExportSessions(w http.ResponseWriter, r *http.Request) {
 
 // DownloadExport downloads an export file
 func (h *ExportHandler) DownloadExport(w http.ResponseWriter, r *http.Request) {
-	_, span := h.tracer.Start(r.Context(), "ExportHandler.DownloadExport")
+	ctx, span := h.tracer.Start(r.Context(), "ExportHandler.DownloadExport")
 	defer span.End()
 
 	vars := mux.Vars(r)
@@ -93,22 +94,64 @@ func (h *ExportHandler) DownloadExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// This would typically serve the file from storage
-	// For now, return a placeholder response
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
-	w.Header().Set("Content-Type", "application/octet-stream")
+	// Construct file path
+	filePath := fmt.Sprintf("exports/%s", filename)
 
-	// In a real implementation, you would:
-	// 1. Check if file exists in storage
-	// 2. Stream the file to the response
-	// 3. Handle appropriate content types
+	// Get the file repository from export service (we need to add a method to access it)
+	fileRepo := h.exportService.GetFileRepository()
 
-	http.Error(w, "Export download not yet implemented", http.StatusNotImplemented)
+	// Check if file exists
+	exists, err := fileRepo.FileExists(ctx, filePath)
+	if err != nil {
+		span.RecordError(err)
+		http.Error(w, "Failed to check file existence", http.StatusInternalServerError)
+		return
+	}
+
+	if !exists {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// Get file size
+	fileSize, err := fileRepo.GetFileSize(ctx, filePath)
+	if err != nil {
+		span.RecordError(err)
+		http.Error(w, "Failed to get file size", http.StatusInternalServerError)
+		return
+	}
+
+	// Get file data
+	fileData, err := fileRepo.GetFile(ctx, filePath)
+	if err != nil {
+		span.RecordError(err)
+		http.Error(w, "Failed to read file", http.StatusInternalServerError)
+		return
+	}
+
+	// Determine content type based on file extension
+	contentType := "application/octet-stream"
+	if strings.HasSuffix(strings.ToLower(filename), ".json") {
+		contentType = "application/json"
+	} else if strings.HasSuffix(strings.ToLower(filename), ".csv") {
+		contentType = "text/csv"
+	} else if strings.HasSuffix(strings.ToLower(filename), ".zip") {
+		contentType = "application/zip"
+	}
+
+	// Set headers for file download
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileSize))
+
+	// Write file data to response
+	w.WriteHeader(http.StatusOK)
+	w.Write(fileData)
 }
 
 // ListExports lists available export files
 func (h *ExportHandler) ListExports(w http.ResponseWriter, r *http.Request) {
-	_, span := h.tracer.Start(r.Context(), "ExportHandler.ListExports")
+	ctx, span := h.tracer.Start(r.Context(), "ExportHandler.ListExports")
 	defer span.End()
 
 	// Parse query parameters
@@ -134,23 +177,52 @@ func (h *ExportHandler) ListExports(w http.ResponseWriter, r *http.Request) {
 		attribute.Int("pagination.offset", offset),
 	)
 
-	// This would typically list export files from storage
-	// For now, return a placeholder response
-	exports := []map[string]interface{}{
-		{
-			"filename":      "otherside_export_20240312_143022.json",
-			"size":          1024000,
-			"format":        "json",
-			"session_count": 3,
-			"generated_at":  time.Now().Add(-24 * time.Hour),
-		},
-		{
-			"filename":      "otherside_export_20240311_092145.zip",
-			"size":          2048000,
-			"format":        "zip",
-			"session_count": 5,
-			"generated_at":  time.Now().Add(-48 * time.Hour),
-		},
+	// List files from export directory
+	fileRepo := h.exportService.GetFileRepository()
+	files, err := fileRepo.ListFiles(ctx, "exports")
+	if err != nil {
+		span.RecordError(err)
+		http.Error(w, "Failed to list export files", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert files to export information
+	var exports []map[string]interface{}
+	for i := offset; i < len(files) && i < offset+limit; i++ {
+		filePath := fmt.Sprintf("exports/%s", files[i])
+		fileSize, _ := fileRepo.GetFileSize(ctx, filePath)
+
+		// Determine format from filename
+		format := "unknown"
+		if strings.HasSuffix(strings.ToLower(files[i]), ".json") {
+			format = "json"
+		} else if strings.HasSuffix(strings.ToLower(files[i]), ".csv") {
+			format = "csv"
+		} else if strings.HasSuffix(strings.ToLower(files[i]), ".zip") {
+			format = "zip"
+		}
+
+		// Parse timestamp from filename (otherside_export_YYYYMMDD_HHMMSS.ext)
+		var generatedAt time.Time
+		if parts := strings.Split(files[i], "_"); len(parts) >= 3 {
+			timestampStr := strings.TrimSuffix(parts[2], filepath.Ext(parts[2]))
+			if timestamp, err := time.Parse("20060102_150405", timestampStr); err == nil {
+				generatedAt = timestamp
+			}
+		}
+
+		if generatedAt.IsZero() {
+			// Fallback to file modification time would go here in a real implementation
+			generatedAt = time.Now()
+		}
+
+		exports = append(exports, map[string]interface{}{
+			"filename":      files[i],
+			"size":          fileSize,
+			"format":        format,
+			"session_count": 0, // Would be parsed from file metadata in a real implementation
+			"generated_at":  generatedAt,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -158,13 +230,13 @@ func (h *ExportHandler) ListExports(w http.ResponseWriter, r *http.Request) {
 		"exports": exports,
 		"limit":   limit,
 		"offset":  offset,
-		"total":   len(exports),
+		"total":   len(files),
 	})
 }
 
 // DeleteExport deletes an export file
 func (h *ExportHandler) DeleteExport(w http.ResponseWriter, r *http.Request) {
-	_, span := h.tracer.Start(r.Context(), "ExportHandler.DeleteExport")
+	ctx, span := h.tracer.Start(r.Context(), "ExportHandler.DeleteExport")
 	defer span.End()
 
 	vars := mux.Vars(r)
@@ -183,11 +255,38 @@ func (h *ExportHandler) DeleteExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// This would typically delete the file from storage
-	// For now, return success
+	// Construct file path
+	filePath := fmt.Sprintf("exports/%s", filename)
+
+	// Get the file repository
+	fileRepo := h.exportService.GetFileRepository()
+
+	// Check if file exists
+	exists, err := fileRepo.FileExists(ctx, filePath)
+	if err != nil {
+		span.RecordError(err)
+		http.Error(w, "Failed to check file existence", http.StatusInternalServerError)
+		return
+	}
+
+	if !exists {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// Delete the file
+	if err := fileRepo.DeleteFile(ctx, filePath); err != nil {
+		span.RecordError(err)
+		http.Error(w, "Failed to delete file", http.StatusInternalServerError)
+		return
+	}
+
+	// Return success response
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Export deleted successfully",
+		"message":  "Export deleted successfully",
+		"filename": filename,
 	})
 }
 
