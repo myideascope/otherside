@@ -456,7 +456,7 @@ func (p *Processor) mergeSimilarEvents(events []EVPEvent) []EVPEvent {
 			current.EndTime = math.Max(current.EndTime, next.EndTime)
 			current.Confidence = math.Max(current.Confidence, next.Confidence)
 			current.Amplitude = math.Max(current.Amplitude, next.Amplitude)
-			current.Description = fmt.Sprintf("Merged EVP: %.1f Hz (%.2fs-%.2s)",
+			current.Description = fmt.Sprintf("Merged EVP: %.1f Hz (%.2fs-%.2f)",
 				current.Frequency, current.StartTime, current.EndTime)
 		} else {
 			merged = append(merged, current)
