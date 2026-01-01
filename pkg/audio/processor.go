@@ -173,12 +173,47 @@ func (p *Processor) highPassFilter(data []float64, cutoffFreq float64) []float64
 
 // notchFilter applies a notch filter to remove specific frequency
 func (p *Processor) notchFilter(data []float64, centerFreq, bandwidth float64) []float64 {
-	// Simple notch filter implementation
-	filtered := make([]float64, len(data))
-	copy(filtered, data)
+	if len(data) == 0 {
+		return data
+	}
 
-	// This would typically use a more sophisticated notch filter algorithm
-	// For now, we'll apply a simple frequency domain approach
+	// Design a second-order IIR notch filter
+	omega0 := 2.0 * math.Pi * centerFreq / float64(p.sampleRate)
+	deltaOmega := 2.0 * math.Pi * bandwidth / float64(p.sampleRate)
+
+	// Calculate filter coefficients
+	cosOmega0 := math.Cos(omega0)
+	alpha := math.Sin(deltaOmega/2) / 2
+
+	b0 := 1.0
+	b1 := -2.0 * cosOmega0
+	b2 := 1.0
+	a0 := 1.0 + alpha
+	a1 := -2.0 * cosOmega0
+	a2 := 1.0 - alpha
+
+	// Normalize coefficients
+	b0 /= a0
+	b1 /= a0
+	b2 /= a0
+	a1 /= a0
+	a2 /= a0
+
+	filtered := make([]float64, len(data))
+
+	// Apply the IIR filter with proper initialization
+	if len(data) >= 1 {
+		filtered[0] = b0 * data[0]
+	}
+	if len(data) >= 2 {
+		filtered[1] = b0*data[1] + b1*data[0] - a1*filtered[0]
+	}
+
+	for i := 2; i < len(data); i++ {
+		filtered[i] = b0*data[i] + b1*data[i-1] + b2*data[i-2] -
+			a1*filtered[i-1] - a2*filtered[i-2]
+	}
+
 	return filtered
 }
 
@@ -222,7 +257,86 @@ func (p *Processor) performSpectralAnalysis(data []float64) SpectralAnalysis {
 	}
 	analysis.ZeroCrossingRate = float64(crossings) / float64(len(data))
 
+	// Perform FFT for spectral features
+	fftData := p.fft.Coefficients(nil, data)
+
+	if len(fftData) > 0 {
+		// Calculate spectral centroid and rolloff
+		var weightedSum, magnitudeSum float64
+		var magnitudes []float64
+
+		for i := 1; i < len(fftData)/2; i++ {
+			magnitude := cmplx.Abs(fftData[i])
+			magnitudes = append(magnitudes, magnitude)
+			freq := float64(i) * float64(p.sampleRate) / float64(len(fftData))
+			weightedSum += magnitude * freq
+			magnitudeSum += magnitude
+		}
+
+		if magnitudeSum > 0 {
+			analysis.SpectralCentroid = weightedSum / magnitudeSum
+
+			// Calculate spectral rolloff (95% of spectral energy)
+			var cumulativeEnergy float64
+			totalEnergy := magnitudeSum
+			rolloffThreshold := 0.95 * totalEnergy
+
+			for i := 1; i < len(magnitudes); i++ {
+				cumulativeEnergy += magnitudes[i]
+				if cumulativeEnergy >= rolloffThreshold {
+					analysis.SpectralRolloff = float64(i) * float64(p.sampleRate) / float64(len(fftData))
+					break
+				}
+			}
+		}
+
+		// Find dominant frequency peaks
+		analysis.DominantFrequencies = p.findFrequencyPeaks(magnitudes, len(fftData))
+	}
+
 	return analysis
+}
+
+// findFrequencyPeaks identifies significant frequency peaks in the spectrum
+func (p *Processor) findFrequencyPeaks(magnitudes []float64, fftSize int) []FrequencyPeak {
+	peaks := []FrequencyPeak{}
+
+	if len(magnitudes) < 3 {
+		return peaks
+	}
+
+	// Simple peak detection algorithm
+	for i := 1; i < len(magnitudes)-1; i++ {
+		if magnitudes[i] > magnitudes[i-1] && magnitudes[i] > magnitudes[i+1] {
+			// Peak detected
+			if magnitudes[i] > p.noiseThreshold*5 { // Threshold for significant peaks
+				frequency := float64(i) * float64(p.sampleRate) / float64(fftSize)
+				quality := magnitudes[i] / (magnitudes[i-1] + magnitudes[i+1] + 1e-10)
+
+				peak := FrequencyPeak{
+					Frequency: frequency,
+					Magnitude: magnitudes[i],
+					Quality:   math.Min(quality, 1.0),
+				}
+				peaks = append(peaks, peak)
+			}
+		}
+	}
+
+	// Sort peaks by magnitude and return top 5
+	for i := 0; i < len(peaks)-1; i++ {
+		for j := i + 1; j < len(peaks); j++ {
+			if peaks[j].Magnitude > peaks[i].Magnitude {
+				peaks[i], peaks[j] = peaks[j], peaks[i]
+			}
+		}
+	}
+
+	if len(peaks) > 5 {
+		peaks = peaks[:5]
+	}
+
+	return peaks
 }
 
 // performFFTAnalysis performs Fast Fourier Transform analysis
@@ -234,32 +348,18 @@ func (p *Processor) performFFTAnalysis(data []float64) ([]complex128, error) {
 		padded := make([]float64, fftSize)
 		copy(padded, data)
 		data = padded
+	} else if len(data) > fftSize {
+		// Truncate to fftSize if longer
+		data = data[:fftSize]
 	}
 
-	// Use gonum FFT correctly - it expects float64 input
-	result := make([]complex128, fftSize)
+	// Use gonum's optimized FFT implementation
+	fft := fourier.NewFFT(fftSize)
 
-	// Simple FFT implementation using gonum
-	// Convert input to the format expected by gonum FFT
-	inputData := make([]float64, fftSize)
-	copy(inputData, data[:fftSize])
+	// Convert to []float64 and perform FFT
+	coeffs := fft.Coefficients(nil, data[:fftSize])
 
-	// Perform FFT using gonum's approach
-	for i := 0; i < fftSize; i++ {
-		result[i] = complex(inputData[i], 0)
-	}
-
-	// Apply basic DFT transformation (simplified)
-	for k := 0; k < fftSize; k++ {
-		sum := complex(0, 0)
-		for n := 0; n < fftSize; n++ {
-			angle := -2.0 * math.Pi * float64(k) * float64(n) / float64(fftSize)
-			sum += complex(inputData[n], 0) * complex(math.Cos(angle), math.Sin(angle))
-		}
-		result[k] = sum
-	}
-
-	return result, nil
+	return coeffs, nil
 }
 
 // detectEVPEvents detects potential EVP events in the audio
@@ -270,31 +370,102 @@ func (p *Processor) detectEVPEvents(timeData []float64, freqData []complex128) [
 		return events
 	}
 
-	// Analyze frequency spectrum for anomalies
-	for i := 1; i < len(freqData)/2; i++ { // Only analyze positive frequencies
-		magnitude := cmplx.Abs(freqData[i])
-		frequency := float64(i) * float64(p.sampleRate) / float64(len(freqData))
+	// Window size for analysis (typically 50ms windows)
+	windowSize := int(0.05 * float64(p.sampleRate))
+	if windowSize < 256 {
+		windowSize = 256
+	}
 
-		// Look for peaks in voice frequency range (85-255 Hz for fundamental, up to 2kHz for harmonics)
-		if frequency >= 85 && frequency <= 2000 && magnitude > p.noiseThreshold*10 {
-			// Calculate confidence based on magnitude and frequency characteristics
-			confidence := math.Min(magnitude/(p.noiseThreshold*20), 1.0)
+	// Overlap windows by 50% for better temporal resolution
+	hopSize := windowSize / 2
 
-			if confidence > 0.3 { // Minimum confidence threshold
-				event := EVPEvent{
-					StartTime:   0, // Would need windowing for precise timing
-					EndTime:     float64(len(timeData)) / float64(p.sampleRate),
-					Confidence:  confidence,
-					Frequency:   frequency,
-					Amplitude:   magnitude,
-					Description: fmt.Sprintf("Potential EVP at %.1f Hz", frequency),
+	// Analyze audio in sliding windows
+	for start := 0; start < len(timeData)-windowSize; start += hopSize {
+		end := start + windowSize
+		if end > len(timeData) {
+			end = len(timeData)
+		}
+
+		windowData := timeData[start:end]
+
+		// Apply Hanning window to reduce spectral leakage
+		hanningWindow := make([]float64, len(windowData))
+		for i := 0; i < len(windowData); i++ {
+			hanningWindow[i] = 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(len(windowData)-1)))
+			windowData[i] *= hanningWindow[i]
+		}
+
+		// Perform FFT on windowed data
+		windowFFT := p.fft.Coefficients(nil, windowData)
+
+		// Analyze frequency spectrum for anomalies in this window
+		for i := 1; i < len(windowFFT)/2; i++ {
+			magnitude := cmplx.Abs(windowFFT[i])
+			frequency := float64(i) * float64(p.sampleRate) / float64(len(windowFFT))
+
+			// Look for peaks in voice frequency range
+			if frequency >= 85 && frequency <= 2000 && magnitude > p.noiseThreshold*15 {
+				// Calculate confidence based on magnitude and frequency characteristics
+				confidence := math.Min(magnitude/(p.noiseThreshold*25), 1.0)
+
+				if confidence > 0.4 { // Slightly higher threshold for windowed analysis
+					startTime := float64(start) / float64(p.sampleRate)
+					endTime := float64(end) / float64(p.sampleRate)
+
+					event := EVPEvent{
+						StartTime:   startTime,
+						EndTime:     endTime,
+						Confidence:  confidence,
+						Frequency:   frequency,
+						Amplitude:   magnitude,
+						Description: fmt.Sprintf("EVP detected at %.1f Hz (%.2fs-%.2fs)", frequency, startTime, endTime),
+					}
+					events = append(events, event)
 				}
-				events = append(events, event)
 			}
 		}
 	}
 
+	// Merge overlapping events with similar frequencies
+	events = p.mergeSimilarEvents(events)
+
 	return events
+}
+
+// mergeSimilarEvents merges overlapping EVP events with similar frequencies
+func (p *Processor) mergeSimilarEvents(events []EVPEvent) []EVPEvent {
+	if len(events) <= 1 {
+		return events
+	}
+
+	// Sort events by start time
+	sortedEvents := make([]EVPEvent, len(events))
+	copy(sortedEvents, events)
+
+	// Simple merge algorithm for overlapping events with similar frequencies
+	merged := []EVPEvent{}
+	current := sortedEvents[0]
+
+	for i := 1; i < len(sortedEvents); i++ {
+		next := sortedEvents[i]
+
+		// Check if events overlap and have similar frequencies
+		if next.StartTime <= current.EndTime &&
+			math.Abs(next.Frequency-current.Frequency) < 100.0 {
+			// Merge events
+			current.EndTime = math.Max(current.EndTime, next.EndTime)
+			current.Confidence = math.Max(current.Confidence, next.Confidence)
+			current.Amplitude = math.Max(current.Amplitude, next.Amplitude)
+			current.Description = fmt.Sprintf("Merged EVP: %.1f Hz (%.2fs-%.2s)",
+				current.Frequency, current.StartTime, current.EndTime)
+		} else {
+			merged = append(merged, current)
+			current = next
+		}
+	}
+	merged = append(merged, current)
+
+	return merged
 }
 
 // calculateAnomalyStrength calculates the overall anomaly strength
