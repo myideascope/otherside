@@ -534,6 +534,7 @@ func (s *ExportService) writeInteractionsCSV(writer *csv.Writer, sessionData map
 
 func (s *ExportService) addAudioFilesToZip(ctx context.Context, zipWriter *zip.Writer, sessionDir string, evps []*domain.EVPRecording) {
 	audioDir := sessionDir + "audio/"
+	
 
 	for _, evp := range evps {
 		if evp.FilePath != "" {
