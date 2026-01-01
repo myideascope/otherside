@@ -49,6 +49,87 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
+# Run tests with race detection
+test-race:
+	@echo "Running tests with race detection..."
+	go test -v -race ./...
+
+# Run tests with coverage and race detection
+test-coverage-race:
+	@echo "Running tests with coverage and race detection..."
+	go test -v -race -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
+# Run specific test package
+test-pkg:
+	@if [ -z "$(PKG)" ]; then \
+		echo "Usage: make test-pkg PKG=package/name"; \
+		exit 1; \
+	fi
+	@echo "Running tests for package $(PKG)..."
+	go test -v ./$(PKG)
+
+# Run tests with verbose output and short mode
+test-quick:
+	@echo "Running quick tests..."
+	go test -v -short ./...
+
+# Generate test coverage report (text)
+test-coverage-text:
+	@echo "Running tests with coverage (text report)..."
+	go test -v -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out
+	@echo "Coverage summary shown above"
+
+# Run benchmarks
+test-bench:
+	@echo "Running benchmarks..."
+	go test -bench=. -benchmem -run=^$$ ./...
+
+# Run integration tests (requires test database)
+test-integration:
+	@echo "Running integration tests..."
+	go test -v -tags=integration ./...
+
+# Run unit tests only
+test-unit:
+	@echo "Running unit tests..."
+	go test -v -short ./... | grep -v integration
+
+# Clean test artifacts
+test-clean:
+	@echo "Cleaning test artifacts..."
+	rm -f coverage.out coverage.html
+	rm -f test.log
+	go clean -testcache
+
+# Test with coverage and threshold checking (requires 80% minimum)
+test-coverage-check:
+	@echo "Running tests with coverage threshold check..."
+	go test -v -coverprofile=coverage.out ./...
+	@COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+	if [ $$(echo "$$COVERAGE >= 80" | bc -l) -eq 1 ]; then \
+		echo "✅ Coverage $$COVERAGE% meets minimum requirement (80%)"; \
+	else \
+		echo "❌ Coverage $$COVERAGE% below minimum requirement (80%)"; \
+		exit 1; \
+	fi
+
+# Generate HTML coverage report and open in browser
+test-coverage-html:
+	@echo "Running tests with HTML coverage report..."
+	go test -v -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+	@if command -v xdg-open >/dev/null 2>&1; then \
+		xdg-open coverage.html; \
+	elif command -v open >/dev/null 2>&1; then \
+		open coverage.html; \
+	else \
+		echo "Open coverage.html in your browser to view the report"; \
+	fi
+
 # Lint code
 lint:
 	@echo "Running linters..."
@@ -152,26 +233,47 @@ help:
 	@echo "OtherSide Paranormal Investigation Application"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  build         Build the application binary"
-	@echo "  run           Run the application"
-	@echo "  run-port      Run on custom port (use PORT=8081 make run-port)"
-	@echo "  test          Run all tests"
-	@echo "  test-coverage Run tests with coverage report"
-	@echo "  lint          Run code linters"
-	@echo "  clean         Clean build artifacts and data"
-	@echo "  deps          Install/update dependencies"
-	@echo "  dev-setup     Install development tools"
-	@echo "  dev           Run with hot reload (requires air)"
-	@echo "  init-dirs     Create required data directories"
-	@echo "  db-reset      Reset database"
-	@echo "  db-backup     Backup database"
-	@echo "  deploy-check  Run all checks for deployment"
-	@echo "  bench         Run performance benchmarks"
-	@echo "  security      Run security scans"
-	@echo "  help          Show this help message"
+	@echo "  build                 Build the application binary"
+	@echo "  run                   Run the application"
+	@echo "  run-port              Run on custom port (use PORT=8081 make run-port)"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test                  Run all tests"
+	@echo "  test-coverage         Run tests with coverage report"
+	@echo "  test-race             Run tests with race detection"
+	@echo "  test-coverage-race    Run tests with coverage and race detection"
+	@echo "  test-pkg PKG=name     Run tests for specific package"
+	@echo "  test-quick            Run quick tests (short mode)"
+	@echo "  test-coverage-text    Generate coverage text report"
+	@echo "  test-bench            Run benchmarks"
+	@echo "  test-integration      Run integration tests"
+	@echo "  test-unit             Run unit tests only"
+	@echo "  test-clean            Clean test artifacts"
+	@echo "  test-coverage-check   Check coverage meets 80% threshold"
+	@echo "  test-coverage-html    Generate HTML coverage and open browser"
+	@echo ""
+	@echo "Development:"
+	@echo "  lint                  Run code linters"
+	@echo "  clean                 Clean build artifacts and data"
+	@echo "  deps                  Install/update dependencies"
+	@echo "  dev-setup             Install development tools"
+	@echo "  dev                   Run with hot reload (requires air)"
+	@echo "  init-dirs             Create required data directories"
+	@echo ""
+	@echo "Database:"
+	@echo "  db-reset              Reset database"
+	@echo "  db-backup             Backup database"
+	@echo ""
+	@echo "Deployment:"
+	@echo "  deploy-check          Run all checks for deployment"
+	@echo "  bench                 Run performance benchmarks"
+	@echo "  security              Run security scans"
+	@echo ""
+	@echo "  help                  Show this help message"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make run                    # Start server on default port 8080"
 	@echo "  PORT=3000 make run-port     # Start server on port 3000"
 	@echo "  make test-coverage          # Run tests and generate coverage report"
+	@echo "  make test-pkg PKG=internal/domain   # Test specific package"
 	@echo "  make deploy-check           # Run all pre-deployment checks"
