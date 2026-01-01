@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/myideascope/otherside/internal/domain"
@@ -82,7 +85,7 @@ func (s *SessionService) ProcessEVPRecording(ctx context.Context, sessionID stri
 	if err != nil {
 		return nil, fmt.Errorf("session not found: %w", err)
 	}
-	
+
 	if session.Status != domain.SessionStatusActive {
 		return nil, fmt.Errorf("session is not active")
 	}
@@ -124,7 +127,7 @@ func (s *SessionService) GenerateVOXCommunication(ctx context.Context, sessionID
 	if err != nil {
 		return nil, fmt.Errorf("session not found: %w", err)
 	}
-	
+
 	// Ensure session is active
 	if session.Status != domain.SessionStatusActive {
 		return nil, fmt.Errorf("session is not active")
@@ -132,10 +135,10 @@ func (s *SessionService) GenerateVOXCommunication(ctx context.Context, sessionID
 
 	// Prepare trigger data for VOX generator
 	triggers := map[string]float64{
-		"emf_anomaly":    triggerData.EMFAnomaly,
-		"audio_anomaly":  triggerData.AudioAnomaly,
-		"temperature":    triggerData.TemperatureFluctuation,
-		"interference":   triggerData.Interference,
+		"emf_anomaly":   triggerData.EMFAnomaly,
+		"audio_anomaly": triggerData.AudioAnomaly,
+		"temperature":   triggerData.TemperatureFluctuation,
+		"interference":  triggerData.Interference,
 	}
 
 	// Generate VOX communication
@@ -183,7 +186,7 @@ func (s *SessionService) ProcessRadarEvent(ctx context.Context, sessionID string
 	if err != nil {
 		return nil, fmt.Errorf("session not found: %w", err)
 	}
-	
+
 	// Ensure session is active
 	if session.Status != domain.SessionStatusActive {
 		return nil, fmt.Errorf("session is not active")
@@ -312,6 +315,16 @@ func (s *SessionService) GetSessionSummary(ctx context.Context, sessionID string
 	}, nil
 }
 
+// GetAllSessions returns all sessions with pagination
+func (s *SessionService) GetAllSessions(ctx context.Context, limit, offset int) ([]*domain.Session, error) {
+	return s.sessionRepo.GetAll(ctx, limit, offset)
+}
+
+// GetSessionsByStatus returns sessions filtered by status with pagination
+func (s *SessionService) GetSessionsByStatus(ctx context.Context, status domain.SessionStatus, limit, offset int) ([]*domain.Session, error) {
+	return s.sessionRepo.GetByStatus(ctx, status)
+}
+
 // Helper methods
 
 func (s *SessionService) determineEVPQuality(result *audio.ProcessingResult) domain.EVPQuality {
@@ -331,17 +344,17 @@ func (s *SessionService) validateRadarEvent(data RadarEventData) bool {
 	if data.Strength < 0.3 {
 		return false
 	}
-	
+
 	// Validate position data
 	if data.Position.X == 0 && data.Position.Y == 0 {
 		return false
 	}
-	
+
 	// Check for reasonable EMF readings
 	if data.EMFReading < 0 || data.EMFReading > 1000 {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -361,17 +374,17 @@ func (s *SessionService) validateSLSDetection(data SLSDetectionData) bool {
 	if data.Confidence < 0.5 {
 		return false
 	}
-	
+
 	// Minimum number of skeletal points
 	if len(data.SkeletalPoints) < 5 {
 		return false
 	}
-	
+
 	// Validate bounding box
 	if data.BoundingBox.Width < 10 || data.BoundingBox.Height < 10 {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -383,13 +396,82 @@ func (s *SessionService) analyzeMovementPattern(points []domain.SkeletalPoint) d
 			Pattern:   "static",
 		}
 	}
-	
-	// Simple movement analysis
-	// In a real implementation, this would be more sophisticated
+
+	// Calculate total distance and direction changes
+	var totalDistance float64
+	var directionAngles []float64
+
+	for i := 1; i < len(points); i++ {
+		prev := points[i-1].Position
+		curr := points[i].Position
+
+		// Calculate 3D distance
+		dx := curr.X - prev.X
+		dy := curr.Y - prev.Y
+		dz := curr.Z - prev.Z
+		distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
+		totalDistance += distance
+
+		// Calculate direction angle in 2D (X-Y plane)
+		angle := math.Atan2(dy, dx)
+		if angle < 0 {
+			angle += 2 * math.Pi
+		}
+		directionAngles = append(directionAngles, angle)
+	}
+
+	// Calculate average speed (distance per unit time, assuming points are evenly spaced)
+	timeIntervals := float64(len(points) - 1)
+	avgSpeed := totalDistance / timeIntervals
+
+	// Calculate predominant direction
+	var avgDirection float64
+	if len(directionAngles) > 0 {
+		var sumX, sumY float64
+		for _, angle := range directionAngles {
+			sumX += math.Cos(angle)
+			sumY += math.Sin(angle)
+		}
+		avgDirection = math.Atan2(sumY, sumX)
+		if avgDirection < 0 {
+			avgDirection += 2 * math.Pi
+		}
+	}
+
+	// Determine movement pattern
+	pattern := "unknown"
+	if avgSpeed < 0.1 {
+		pattern = "static"
+	} else if len(directionAngles) > 2 {
+		// Check if movement is linear or erratic
+		var directionVariance float64
+		if len(directionAngles) > 1 {
+			mean := avgDirection
+			for _, angle := range directionAngles {
+				diff := angle - mean
+				if diff > math.Pi {
+					diff -= 2 * math.Pi
+				} else if diff < -math.Pi {
+					diff += 2 * math.Pi
+				}
+				directionVariance += diff * diff
+			}
+			directionVariance /= float64(len(directionAngles))
+		}
+
+		if directionVariance < 0.5 {
+			pattern = "linear"
+		} else if directionVariance > 2.0 {
+			pattern = "erratic"
+		} else {
+			pattern = "curved"
+		}
+	}
+
 	return domain.MovementAnalysis{
-		Speed:     0.5, // Placeholder
-		Direction: 0,   // Placeholder
-		Pattern:   "unknown",
+		Speed:     avgSpeed,
+		Direction: avgDirection,
+		Pattern:   pattern,
 	}
 }
 
@@ -407,7 +489,7 @@ func (s *SessionService) calculateSessionStatistics(
 		TotalSLSDetections: len(slsDetections),
 		TotalInteractions:  len(interactions),
 	}
-	
+
 	// Calculate EVP quality distribution
 	for _, evp := range evps {
 		switch evp.Quality {
@@ -417,7 +499,7 @@ func (s *SessionService) calculateSessionStatistics(
 			stats.MediumQualityEVPs++
 		}
 	}
-	
+
 	// Calculate average anomaly strength
 	if len(evps) > 0 {
 		var totalStrength float64
@@ -426,21 +508,26 @@ func (s *SessionService) calculateSessionStatistics(
 		}
 		stats.AverageAnomalyStrength = totalStrength / float64(len(evps))
 	}
-	
+
 	return stats
 }
 
-// generateID generates a unique ID (simplified implementation)
+// generateID generates a unique ID using crypto/rand
 func generateID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback to timestamp if crypto/rand fails
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(bytes)
 }
 
 // Request/Response types
 
 type CreateSessionRequest struct {
-	Title         string              `json:"title"`
-	Location      domain.Location     `json:"location"`
-	Notes         string              `json:"notes"`
+	Title         string               `json:"title"`
+	Location      domain.Location      `json:"location"`
+	Notes         string               `json:"notes"`
 	Environmental domain.Environmental `json:"environmental"`
 }
 
@@ -450,12 +537,12 @@ type EVPMetadata struct {
 }
 
 type VOXTriggerData struct {
-	EMFAnomaly              float64 `json:"emf_anomaly"`
-	AudioAnomaly            float64 `json:"audio_anomaly"`
-	TemperatureFluctuation  float64 `json:"temperature_fluctuation"`
-	Interference            float64 `json:"interference"`
-	LanguagePack            string  `json:"language_pack"`
-	PhoneticBankSize        int     `json:"phonetic_bank_size"`
+	EMFAnomaly             float64 `json:"emf_anomaly"`
+	AudioAnomaly           float64 `json:"audio_anomaly"`
+	TemperatureFluctuation float64 `json:"temperature_fluctuation"`
+	Interference           float64 `json:"interference"`
+	LanguagePack           string  `json:"language_pack"`
+	PhoneticBankSize       int     `json:"phonetic_bank_size"`
 }
 
 type RadarEventData struct {
@@ -468,40 +555,40 @@ type RadarEventData struct {
 }
 
 type SLSDetectionData struct {
-	SkeletalPoints  []domain.SkeletalPoint `json:"skeletal_points"`
-	Confidence      float64                `json:"confidence"`
-	BoundingBox     domain.BoundingBox     `json:"bounding_box"`
-	VideoFrame      string                 `json:"video_frame"`
-	FiltersApplied  []string               `json:"filters_applied"`
-	Duration        float64                `json:"duration"`
+	SkeletalPoints []domain.SkeletalPoint `json:"skeletal_points"`
+	Confidence     float64                `json:"confidence"`
+	BoundingBox    domain.BoundingBox     `json:"bounding_box"`
+	VideoFrame     string                 `json:"video_frame"`
+	FiltersApplied []string               `json:"filters_applied"`
+	Duration       float64                `json:"duration"`
 }
 
 type UserInteractionData struct {
-	Type             domain.InteractionType     `json:"type"`
-	Content          string                     `json:"content"`
-	AudioPath        string                     `json:"audio_path,omitempty"`
-	Response         string                     `json:"response,omitempty"`
-	ResponseTime     float64                    `json:"response_time,omitempty"`
-	RandomizerResult *domain.RandomizerResult   `json:"randomizer_result,omitempty"`
+	Type             domain.InteractionType   `json:"type"`
+	Content          string                   `json:"content"`
+	AudioPath        string                   `json:"audio_path,omitempty"`
+	Response         string                   `json:"response,omitempty"`
+	ResponseTime     float64                  `json:"response_time,omitempty"`
+	RandomizerResult *domain.RandomizerResult `json:"randomizer_result,omitempty"`
 }
 
 type SessionSummary struct {
-	Session       *domain.Session            `json:"session"`
-	EVPs          []*domain.EVPRecording     `json:"evps"`
-	VOXEvents     []*domain.VOXEvent         `json:"vox_events"`
-	RadarEvents   []*domain.RadarEvent       `json:"radar_events"`
-	SLSDetections []*domain.SLSDetection     `json:"sls_detections"`
-	Interactions  []*domain.UserInteraction  `json:"interactions"`
-	Statistics    SessionStatistics          `json:"statistics"`
+	Session       *domain.Session           `json:"session"`
+	EVPs          []*domain.EVPRecording    `json:"evps"`
+	VOXEvents     []*domain.VOXEvent        `json:"vox_events"`
+	RadarEvents   []*domain.RadarEvent      `json:"radar_events"`
+	SLSDetections []*domain.SLSDetection    `json:"sls_detections"`
+	Interactions  []*domain.UserInteraction `json:"interactions"`
+	Statistics    SessionStatistics         `json:"statistics"`
 }
 
 type SessionStatistics struct {
-	TotalEVPs               int     `json:"total_evps"`
-	TotalVOXEvents          int     `json:"total_vox_events"`
-	TotalRadarEvents        int     `json:"total_radar_events"`
-	TotalSLSDetections      int     `json:"total_sls_detections"`
-	TotalInteractions       int     `json:"total_interactions"`
-	HighQualityEVPs         int     `json:"high_quality_evps"`
-	MediumQualityEVPs       int     `json:"medium_quality_evps"`
-	AverageAnomalyStrength  float64 `json:"average_anomaly_strength"`
+	TotalEVPs              int     `json:"total_evps"`
+	TotalVOXEvents         int     `json:"total_vox_events"`
+	TotalRadarEvents       int     `json:"total_radar_events"`
+	TotalSLSDetections     int     `json:"total_sls_detections"`
+	TotalInteractions      int     `json:"total_interactions"`
+	HighQualityEVPs        int     `json:"high_quality_evps"`
+	MediumQualityEVPs      int     `json:"medium_quality_evps"`
+	AverageAnomalyStrength float64 `json:"average_anomaly_strength"`
 }

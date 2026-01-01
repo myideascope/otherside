@@ -7,8 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/myideascope/otherside/internal/service"
 	"github.com/gorilla/mux"
+	"github.com/myideascope/otherside/internal/domain"
+	"github.com/myideascope/otherside/internal/service"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -304,7 +305,7 @@ func (h *SessionHandler) RecordInteraction(w http.ResponseWriter, r *http.Reques
 
 // ListSessions lists all sessions with pagination
 func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
-	_, span := h.tracer.Start(r.Context(), "SessionHandler.ListSessions")
+	ctx, span := h.tracer.Start(r.Context(), "SessionHandler.ListSessions")
 	defer span.End()
 
 	// Parse query parameters
@@ -332,8 +333,79 @@ func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 		attribute.String("filter.status", status),
 	)
 
-	// For now, return placeholder implementation
-	http.Error(w, "Session listing not yet implemented", http.StatusNotImplemented)
+	// Get sessions from repository
+	var sessions []*service.SessionSummary
+	var total int
+
+	if status != "" {
+		// Filter by status
+		var sessionStatus domain.SessionStatus
+		switch status {
+		case "active":
+			sessionStatus = domain.SessionStatusActive
+		case "complete":
+			sessionStatus = domain.SessionStatusComplete
+		case "paused":
+			sessionStatus = domain.SessionStatusPaused
+		case "archived":
+			sessionStatus = domain.SessionStatusArchived
+		default:
+			http.Error(w, "Invalid status filter", http.StatusBadRequest)
+			return
+		}
+
+		// Get sessions by status
+		sessionList, err := h.sessionService.GetSessionsByStatus(ctx, sessionStatus, limit, offset)
+		if err != nil {
+			span.RecordError(err)
+			http.Error(w, "Failed to list sessions", http.StatusInternalServerError)
+			return
+		}
+
+		// Convert to session summaries
+		for _, session := range sessionList {
+			summary, err := h.sessionService.GetSessionSummary(ctx, session.ID)
+			if err != nil {
+				// Skip sessions that can't be summarized
+				continue
+			}
+			sessions = append(sessions, summary)
+		}
+
+		// Get total count (this would need a CountByStatus method)
+		total = len(sessions) // Placeholder
+	} else {
+		// Get all sessions
+		sessionList, err := h.sessionService.GetAllSessions(ctx, limit, offset)
+		if err != nil {
+			span.RecordError(err)
+			http.Error(w, "Failed to list sessions", http.StatusInternalServerError)
+			return
+		}
+
+		// Convert to session summaries
+		for _, session := range sessionList {
+			summary, err := h.sessionService.GetSessionSummary(ctx, session.ID)
+			if err != nil {
+				// Skip sessions that can't be summarized
+				continue
+			}
+			sessions = append(sessions, summary)
+		}
+
+		// Get total count (this would need a Count method)
+		total = len(sessions) // Placeholder
+	}
+
+	// Return response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"sessions": sessions,
+		"limit":    limit,
+		"offset":   offset,
+		"total":    total,
+	})
 }
 
 // GetSessionEvents gets all events for a session
@@ -359,7 +431,7 @@ func (h *SessionHandler) GetSessionEvents(w http.ResponseWriter, r *http.Request
 
 	// Filter events based on type
 	result := make(map[string]interface{})
-	
+
 	switch eventType {
 	case "evp":
 		result["events"] = summary.EVPs
@@ -413,7 +485,7 @@ func (h *SessionHandler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/v1/sessions/{sessionId}/radar", h.ProcessRadar).Methods("POST")
 	r.HandleFunc("/api/v1/sessions/{sessionId}/sls", h.ProcessSLS).Methods("POST")
 	r.HandleFunc("/api/v1/sessions/{sessionId}/interactions", h.RecordInteraction).Methods("POST")
-	
+
 	// Event retrieval
 	r.HandleFunc("/api/v1/sessions/{sessionId}/events", h.GetSessionEvents).Methods("GET")
 

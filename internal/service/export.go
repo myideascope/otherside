@@ -36,28 +36,28 @@ const (
 
 // ExportRequest contains export parameters
 type ExportRequest struct {
-	SessionIDs    []string     `json:"session_ids"`
-	Format        ExportFormat `json:"format"`
-	IncludeAudio  bool         `json:"include_audio"`
-	IncludeVideo  bool         `json:"include_video"`
-	DateFrom      *time.Time   `json:"date_from,omitempty"`
-	DateTo        *time.Time   `json:"date_to,omitempty"`
-	IncludeEVPs   bool         `json:"include_evps"`
-	IncludeVOX    bool         `json:"include_vox"`
-	IncludeRadar  bool         `json:"include_radar"`
-	IncludeSLS    bool         `json:"include_sls"`
-	IncludeNotes  bool         `json:"include_notes"`
+	SessionIDs   []string     `json:"session_ids"`
+	Format       ExportFormat `json:"format"`
+	IncludeAudio bool         `json:"include_audio"`
+	IncludeVideo bool         `json:"include_video"`
+	DateFrom     *time.Time   `json:"date_from,omitempty"`
+	DateTo       *time.Time   `json:"date_to,omitempty"`
+	IncludeEVPs  bool         `json:"include_evps"`
+	IncludeVOX   bool         `json:"include_vox"`
+	IncludeRadar bool         `json:"include_radar"`
+	IncludeSLS   bool         `json:"include_sls"`
+	IncludeNotes bool         `json:"include_notes"`
 }
 
 // ExportResult contains export results and metadata
 type ExportResult struct {
-	Filename    string    `json:"filename"`
-	Size        int64     `json:"size"`
-	Format      string    `json:"format"`
-	SessionCount int      `json:"session_count"`
-	ItemCount   int       `json:"item_count"`
-	GeneratedAt time.Time `json:"generated_at"`
-	FilePath    string    `json:"file_path"`
+	Filename     string    `json:"filename"`
+	Size         int64     `json:"size"`
+	Format       string    `json:"format"`
+	SessionCount int       `json:"session_count"`
+	ItemCount    int       `json:"item_count"`
+	GeneratedAt  time.Time `json:"generated_at"`
+	FilePath     string    `json:"file_path"`
 }
 
 // NewExportService creates a new export service
@@ -90,7 +90,7 @@ func (s *ExportService) ExportSessions(ctx context.Context, req ExportRequest) (
 
 	// Collect session data
 	sessionData := make(map[string]*SessionExportData)
-	
+
 	for _, sessionID := range req.SessionIDs {
 		data, err := s.collectSessionData(ctx, sessionID, req)
 		if err != nil {
@@ -110,7 +110,7 @@ func (s *ExportService) ExportSessions(ctx context.Context, req ExportRequest) (
 	case ExportFormatCSV:
 		exportData, filename, err = s.exportAsCSV(sessionData, req)
 	case ExportFormatZIP:
-		exportData, filename, err = s.exportAsZIP(sessionData, req)
+		exportData, filename, err = s.exportAsZIP(ctx, sessionData, req)
 	default:
 		return nil, fmt.Errorf("unsupported export format: %s", req.Format)
 	}
@@ -128,7 +128,7 @@ func (s *ExportService) ExportSessions(ctx context.Context, req ExportRequest) (
 	// Calculate statistics
 	totalItems := 0
 	for _, data := range sessionData {
-		totalItems += len(data.EVPs) + len(data.VOXEvents) + len(data.RadarEvents) + 
+		totalItems += len(data.EVPs) + len(data.VOXEvents) + len(data.RadarEvents) +
 			len(data.SLSDetections) + len(data.Interactions)
 	}
 
@@ -145,12 +145,12 @@ func (s *ExportService) ExportSessions(ctx context.Context, req ExportRequest) (
 
 // SessionExportData contains all data for a session export
 type SessionExportData struct {
-	Session      *domain.Session            `json:"session"`
-	EVPs         []*domain.EVPRecording     `json:"evps,omitempty"`
-	VOXEvents    []*domain.VOXEvent         `json:"vox_events,omitempty"`
-	RadarEvents  []*domain.RadarEvent       `json:"radar_events,omitempty"`
+	Session       *domain.Session           `json:"session"`
+	EVPs          []*domain.EVPRecording    `json:"evps,omitempty"`
+	VOXEvents     []*domain.VOXEvent        `json:"vox_events,omitempty"`
+	RadarEvents   []*domain.RadarEvent      `json:"radar_events,omitempty"`
 	SLSDetections []*domain.SLSDetection    `json:"sls_detections,omitempty"`
-	Interactions []*domain.UserInteraction  `json:"interactions,omitempty"`
+	Interactions  []*domain.UserInteraction `json:"interactions,omitempty"`
 }
 
 func (s *ExportService) collectSessionData(ctx context.Context, sessionID string, req ExportRequest) (*SessionExportData, error) {
@@ -297,7 +297,7 @@ func (s *ExportService) exportAsCSV(sessionData map[string]*SessionExportData, r
 	return buf.Bytes(), filename, nil
 }
 
-func (s *ExportService) exportAsZIP(sessionData map[string]*SessionExportData, req ExportRequest) ([]byte, string, error) {
+func (s *ExportService) exportAsZIP(ctx context.Context, sessionData map[string]*SessionExportData, req ExportRequest) ([]byte, string, error) {
 	var buf bytes.Buffer
 	zipWriter := zip.NewWriter(&buf)
 	defer zipWriter.Close()
@@ -329,7 +329,7 @@ func (s *ExportService) exportAsZIP(sessionData map[string]*SessionExportData, r
 	// Add individual session files
 	for sessionID, data := range sessionData {
 		sessionDir := fmt.Sprintf("sessions/%s/", sessionID)
-		
+
 		// Session summary
 		summaryData, _ := json.MarshalIndent(data.Session, "", "  ")
 		summaryFile, _ := zipWriter.Create(sessionDir + "summary.json")
@@ -337,7 +337,7 @@ func (s *ExportService) exportAsZIP(sessionData map[string]*SessionExportData, r
 
 		// Add audio files if requested and available
 		if req.IncludeAudio {
-			s.addAudioFilesToZip(zipWriter, sessionDir, data.EVPs)
+			s.addAudioFilesToZip(ctx, zipWriter, sessionDir, data.EVPs)
 		}
 	}
 
@@ -387,7 +387,7 @@ func (s *ExportService) writeSessionsCSV(writer *csv.Writer, sessionData map[str
 func (s *ExportService) writeEVPsCSV(writer *csv.Writer, sessionData map[string]*SessionExportData) error {
 	// Write header
 	header := []string{
-		"Session ID", "EVP ID", "Timestamp", "Duration", "Quality", 
+		"Session ID", "EVP ID", "Timestamp", "Duration", "Quality",
 		"Detection Level", "File Path", "Annotations",
 	}
 	writer.Write(header)
@@ -532,11 +532,43 @@ func (s *ExportService) writeInteractionsCSV(writer *csv.Writer, sessionData map
 	return nil
 }
 
-func (s *ExportService) addAudioFilesToZip(zipWriter *zip.Writer, sessionDir string, evps []*domain.EVPRecording) {
+func (s *ExportService) addAudioFilesToZip(ctx context.Context, zipWriter *zip.Writer, sessionDir string, evps []*domain.EVPRecording) {
+	audioDir := sessionDir + "audio/"
+	
+
 	for _, evp := range evps {
 		if evp.FilePath != "" {
-			// This would copy actual audio files to the ZIP
-			// Implementation depends on file storage system
+			// Read the audio file from storage
+			audioData, err := s.fileRepo.GetFile(ctx, evp.FilePath)
+			if err != nil {
+				// Log error but continue with other files
+				continue
+			}
+
+			// Create filename based on EVP ID and original extension
+			filename := fmt.Sprintf("evp_%s%s", evp.ID, filepath.Ext(evp.FilePath))
+			if filename == "evp_"+evp.ID {
+				filename += ".wav" // Default extension if none found
+			}
+
+			// Create file in ZIP
+			audioFile, err := zipWriter.Create(audioDir + filename)
+			if err != nil {
+				continue
+			}
+
+			// Write audio data to ZIP
+			audioFile.Write(audioData)
+
+			// Also add processed audio if available
+			if evp.ProcessedPath != "" {
+				processedData, err := s.fileRepo.GetFile(ctx, evp.ProcessedPath)
+				if err == nil {
+					processedFilename := fmt.Sprintf("evp_%s_processed%s", evp.ID, filepath.Ext(evp.ProcessedPath))
+					processedFile, _ := zipWriter.Create(audioDir + processedFilename)
+					processedFile.Write(processedData)
+				}
+			}
 		}
 	}
 }
@@ -566,9 +598,14 @@ File Formats:
 For questions or support, visit: https://github.com/myideascope/otherside
 
 Generated by OtherSide Paranormal Investigation App v1.0.0
-`, time.Now().Format(time.RFC3339), 
-   req.IncludeEVPs, req.IncludeVOX, req.IncludeRadar, 
-   req.IncludeSLS, req.IncludeNotes, req.IncludeAudio, req.IncludeVideo)
+`, time.Now().Format(time.RFC3339),
+		req.IncludeEVPs, req.IncludeVOX, req.IncludeRadar,
+		req.IncludeSLS, req.IncludeNotes, req.IncludeAudio, req.IncludeVideo)
+}
+
+// GetFileRepository returns the file repository for direct file operations
+func (s *ExportService) GetFileRepository() domain.FileRepository {
+	return s.fileRepo
 }
 
 // Helper functions

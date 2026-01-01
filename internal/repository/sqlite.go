@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"os"
 	"time"
 
-	"github.com/myideascope/otherside/internal/domain"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/myideascope/otherside/internal/domain"
 )
 
 // SQLiteSessionRepository implements SessionRepository using SQLite
@@ -430,4 +432,53 @@ func (r *SQLiteEVPRepository) GetByDetectionLevel(ctx context.Context, minLevel 
 	}
 
 	return evps, rows.Err()
+}
+
+// Database initialization and migration functions
+
+// NewSQLiteDB creates a new SQLite database connection
+func NewSQLiteDB(dbPath string) (*sql.DB, error) {
+	// Ensure data directory exists
+	if err := os.MkdirAll("./data", 0755); err != nil {
+		return nil, fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	// Open database connection
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	// Configure connection
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
+
+	// Enable foreign key support
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
+	// Enable WAL mode for better concurrency
+	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+	}
+
+	return db, nil
+}
+
+// RunMigrations runs database schema migrations
+func RunMigrations(db *sql.DB) error {
+	// Read schema file
+	schemaBytes, err := os.ReadFile("configs/schema.sql")
+	if err != nil {
+		return fmt.Errorf("failed to read schema file: %w", err)
+	}
+
+	// Execute schema
+	if _, err := db.Exec(string(schemaBytes)); err != nil {
+		return fmt.Errorf("failed to execute schema: %w", err)
+	}
+
+	return nil
 }
