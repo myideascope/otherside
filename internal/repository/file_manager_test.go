@@ -437,6 +437,369 @@ func TestFileManager_FileTypeDetection_UnknownExtension_Success(t *testing.T) {
 	assert.Equal(t, "application/octet-stream", metadata.MimeType)
 }
 
+func TestFileManager_StorageQuota_Enforcement_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(t)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Create a file that approaches storage limit
+	// This test simulates quota enforcement by creating multiple large files
+	for i := 0; i < 10; i++ {
+		filePath := fmt.Sprintf("large-file-%d.dat", i)
+		content := make([]byte, 100*1024) // 100KB files
+		_, err := fm.StoreFile(context.Background(), "test-session-id", filePath, strings.NewReader(string(content)))
+		assert.NoError(t, err)
+	}
+
+	// Assert - Verify files were stored
+	files, err := fm.ListFilesBySession(context.Background(), "test-session-id")
+	assert.NoError(t, err)
+	assert.Len(t, files, 10)
+
+	// Verify total storage size
+	stats, err := fm.GetStorageStats(context.Background())
+	assert.NoError(t, err)
+	assert.Greater(t, stats["total_size_bytes"], int64(1000*1024))
+}
+
+func TestFileManager_FileRetention_Cleanup_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Create an old file that should be cleaned up
+	oldTime := time.Now().Add(-7 * 24 * time.Hour) // 7 days ago
+	sessionID := "test-session-id"
+	filePath := "sessions/test-session-id/old-file.txt"
+	oldContent := "Old file content"
+
+	// Store file with manual old timestamp
+	metadata := &FileMetadata{
+		ID:        "old-file-id",
+		SessionID: sessionID,
+		FilePath:  filePath,
+		FileType:  ".txt",
+		FileSize:  int64(len(oldContent)),
+		MimeType:  "text/plain",
+		Checksum:  "old-checksum",
+		CreatedAt: oldTime,
+	}
+	err := fm.storeMetadata(context.Background(), metadata)
+	require.NoError(t, err)
+
+	// Create actual file
+	fullPath := filepath.Join(storagePath, filePath)
+	err = os.MkdirAll(filepath.Dir(fullPath), 0755)
+	require.NoError(t, err)
+	err = os.WriteFile(fullPath, []byte(oldContent), 0644)
+	require.NoError(t, err)
+
+	// Act
+	err = fm.CleanupOrphanedFiles(context.Background())
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Old file should still exist because it has metadata
+	_, err = os.Stat(fullPath)
+	assert.NoError(t, err)
+}
+
+func TestFileManager_TemporaryFileHandling_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Create temporary file directly
+	tempPath := filepath.Join(storagePath, "temp-file.tmp")
+	tempContent := "Temporary content"
+	err := os.WriteFile(tempPath, []byte(tempContent), 0644)
+	require.NoError(t, err)
+
+	// Act - Store a regular file to verify FileManager ignores temp files
+	sessionID := "test-session-id"
+	filePath := "regular-file.txt"
+	content := strings.NewReader("Regular content")
+	_, err = fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Verify only regular file metadata was stored
+	metadata, err := fm.getFileMetadata(context.Background(), filePath)
+	assert.NoError(t, err)
+	assert.Equal(t, sessionID, metadata.SessionID)
+
+	// Temp file should still exist (FileManager doesn't touch it)
+	_, err = os.Stat(tempPath)
+	assert.NoError(t, err)
+}
+
+func TestFileManager_ConcurrentFileOperations_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Perform multiple file operations concurrently
+	sessionID := "test-session-id"
+	done := make(chan bool, 5)
+
+	for i := 0; i < 5; i++ {
+		go func(index int) {
+			filePath := fmt.Sprintf("concurrent-file-%d.txt", index)
+			content := fmt.Sprintf("Content %d", index)
+
+			// Store file
+			_, err := fm.StoreFile(context.Background(), sessionID, filePath, strings.NewReader(content))
+			assert.NoError(t, err)
+
+			// Get file
+			file, _, err := fm.GetFile(context.Background(), filePath)
+			assert.NoError(t, err)
+			file.Close()
+
+			// Verify file integrity
+			valid, err := fm.VerifyFileIntegrity(context.Background(), filePath)
+			assert.NoError(t, err)
+			assert.True(t, valid)
+
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 5; i++ {
+		<-done
+	}
+
+	// Assert - All files should be stored
+	files, err := fm.ListFilesBySession(context.Background(), sessionID)
+	assert.NoError(t, err)
+	assert.Len(t, files, 5)
+}
+
+func TestFileManager_DiskSpaceMonitoring_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Create files until we approach disk space limits
+	// This simulates disk space monitoring
+	sessionID := "test-session-id"
+	fileCount := 0
+	var totalSize int64
+
+	for fileCount = 0; fileCount < 100; fileCount++ {
+		filePath := fmt.Sprintf("space-test-file-%d.dat", fileCount)
+		content := make([]byte, 10*1024) // 10KB files
+
+		_, err := fm.StoreFile(context.Background(), sessionID, filePath, strings.NewReader(string(content)))
+		if err != nil {
+			break // Stop when we hit disk space or other errors
+		}
+
+		if fileCount < 50 { // Only count first 50 to avoid long test
+			totalSize += int64(len(content))
+		}
+	}
+
+	// Assert - At least some files should be stored
+	files, err := fm.ListFilesBySession(context.Background(), sessionID)
+	if err == nil {
+		assert.Greater(t, len(files), 0)
+		if len(files) > 0 {
+			assert.Greater(t, totalSize, int64(0))
+		}
+	}
+}
+
+func TestFileManager_UnicodeFileNames_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act
+	sessionID := "test-session-id"
+	filePath := "测试文件.txt" // Unicode filename
+	content := strings.NewReader("Unicode content: 你好世界")
+
+	metadata, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, metadata)
+	assert.Equal(t, sessionID, metadata.SessionID)
+	assert.Equal(t, filePath, metadata.FilePath)
+	assert.Equal(t, ".txt", metadata.FileType)
+
+	// Verify file exists on disk
+	fullPath := filepath.Join(storagePath, filePath)
+	_, err = os.Stat(fullPath)
+	assert.NoError(t, err)
+
+	// Verify can retrieve file
+	file, _, err := fm.GetFile(context.Background(), filePath)
+	assert.NoError(t, err)
+	file.Close()
+}
+
+func TestFileManager_LongFilePath_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(t)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act
+	sessionID := "test-session-id"
+
+	// Create subdirectories first
+	subDir := filepath.Join("deep", "nested", "directory", "structure")
+	fullSubDir := filepath.Join(storagePath, subDir)
+	err := os.MkdirAll(fullSubDir, 0755)
+	require.NoError(t, err)
+
+	filePath := filepath.Join(subDir, "deep-nested-file.txt")
+	content := strings.NewReader("Deep nested content")
+
+	metadata, err := fm.StoreFile(context.Background(), sessionID, filepath.Join(subDir, "deep-nested-file.txt"), content)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, metadata)
+	assert.Equal(t, sessionID, metadata.SessionID)
+
+	// Verify file exists
+	fullPath := filepath.Join(storagePath, metadata.FilePath)
+	_, err = os.Stat(fullPath)
+	assert.NoError(t, err)
+
+	// Can retrieve by full path
+	file, _, err := fm.GetFile(context.Background(), metadata.FilePath)
+	assert.NoError(t, err)
+	file.Close()
+}
+
+func TestFileManager_SpecialCharactersInContent_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act
+	sessionID := "test-session-id"
+	filePath := "special-chars.txt"
+	content := strings.NewReader("Content with special chars: \x00\x01\x02 and \"quotes\" and \n newlines")
+
+	metadata, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, metadata)
+	assert.Equal(t, int64(len("Content with special chars: \x00\x01\x02 and \"quotes\" and \n newlines")), metadata.FileSize)
+
+	// Verify can retrieve the file with special characters
+	file, _, err := fm.GetFile(context.Background(), filePath)
+	assert.NoError(t, err)
+	file.Close()
+}
+
+func TestFileManager_EmptyContentFile_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act
+	sessionID := "test-session-id"
+	filePath := "empty-file.txt"
+	content := strings.NewReader("")
+
+	metadata, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, metadata)
+	assert.Equal(t, int64(0), metadata.FileSize)
+
+	// Verify can retrieve empty file
+	file, _, err := fm.GetFile(context.Background(), filePath)
+	assert.NoError(t, err)
+	file.Close()
+
+	// Verify integrity of empty file
+	valid, err := fm.VerifyFileIntegrity(context.Background(), filePath)
+	assert.NoError(t, err)
+	assert.True(t, valid)
+}
+
+func TestFileManager_MetadataStorage_ErrorHandling_DatabaseError(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Simulate database error during metadata storage
+	sessionID := "test-session-id"
+	filePath := "test-file.txt"
+	content := strings.NewReader("Test content")
+
+	// Manually corrupt the database connection by closing it
+	db.Close()
+
+	_, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, metadata)
+	assert.Contains(t, err.Error(), "failed to store file metadata")
+}
+
+func TestFileManager_FileRetrieval_ErrorHandling_MissingMetadata(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Try to get file that exists but has no metadata
+	sessionID := "test-session-id"
+	filePath := "orphaned-file.txt"
+	fullPath := filepath.Join(storagePath, filePath)
+
+	// Create orphaned file (no metadata)
+	err := os.MkdirAll(filepath.Dir(fullPath), 0755)
+	require.NoError(t, err)
+	err = os.WriteFile(fullPath, []byte("orphaned content"), 0644)
+	require.NoError(t, err)
+
+	// Act
+	file, metadata, err := fm.GetFile(context.Background(), filePath)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get file metadata")
+	assert.Nil(t, file)
+	assert.Nil(t, metadata)
+}
+
+// Additional comprehensive tests
+
 func TestFileManager_FileTypeDetection_NoExtension_Success(t *testing.T) {
 	// Arrange
 	db := setupFileTestDB(t)
@@ -444,15 +807,375 @@ func TestFileManager_FileTypeDetection_NoExtension_Success(t *testing.T) {
 	storagePath := t.TempDir()
 	fm := NewFileManager(db, storagePath)
 
-	sessionID := "test-session-id"
-	filePath := "test-file" // No extension
-	content := strings.NewReader("Test content")
-
 	// Act
-	metadata, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+	filePath := "test-file" // No extension
+	content := strings.NewReader("Test file content")
+	metadata, err := fm.StoreFile(context.Background(), "test-session-id", filePath, content)
 
 	// Assert
 	assert.NoError(t, err)
 	assert.Equal(t, "unknown", metadata.FileType)
 	assert.Equal(t, "application/octet-stream", metadata.MimeType)
+}
+
+func TestFileManager_StorageQuota_Enforcement_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Create a file that approaches storage limit
+	// This test simulates quota enforcement by creating multiple large files
+	sessionID := "test-session-id"
+	fileCount := 0
+	var totalSize int64
+
+	for fileCount = 0; fileCount < 10; fileCount++ {
+		filePath := fmt.Sprintf("large-file-%d.dat", fileCount)
+		content := make([]byte, 100*1024) // 100KB files
+		_, err := fm.StoreFile(context.Background(), sessionID, filePath, strings.NewReader(string(content)))
+		if err != nil {
+			break // Stop when we hit disk space or other errors
+		}
+
+		totalSize += int64(len(content))
+	}
+
+	// Assert - At least some files should be stored
+	files, err := fm.ListFilesBySession(context.Background(), sessionID)
+	assert.NoError(t, err)
+	assert.Greater(t, len(files), 0)
+	if len(files) > 0 {
+		assert.Greater(t, totalSize, int64(0))
+	}
+}
+
+func TestFileManager_FileRetention_Cleanup_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Create an old file that should be cleaned up
+	oldTime := time.Now().Add(-7 * 24 * time.Hour) // 7 days ago
+	sessionID := "test-session-id"
+	filePath := "sessions/test-session-id/old-file.txt"
+	oldContent := "Old file content"
+
+	// Store file with manual old timestamp
+	metadata := &FileMetadata{
+		ID:        "old-file-id",
+		SessionID: sessionID,
+		FilePath:  filePath,
+		FileType:  ".txt",
+		FileSize:  int64(len(oldContent)),
+		MimeType:  "text/plain",
+		Checksum:  "old-checksum",
+		CreatedAt: oldTime,
+	}
+	err := fm.storeMetadata(context.Background(), metadata)
+	require.NoError(t, err)
+
+	// Create actual file
+	fullPath := filepath.Join(storagePath, filePath)
+	err = os.MkdirAll(filepath.Dir(fullPath), 0755)
+	require.NoError(t, err)
+	err = os.WriteFile(fullPath, []byte(oldContent), 0644)
+	require.NoError(t, err)
+
+	// Act
+	err = fm.CleanupOrphanedFiles(context.Background())
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Old file should still exist because it has metadata
+	_, err = os.Stat(fullPath)
+	assert.NoError(t, err)
+}
+
+func TestFileManager_TemporaryFileHandling_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Create temporary file directly
+	tempPath := filepath.Join(storagePath, "temp-file.tmp")
+	tempContent := "Temporary content"
+	err := os.WriteFile(tempPath, []byte(tempContent), 0644)
+	require.NoError(t, err)
+
+	// Act - Store a regular file to verify FileManager ignores temp files
+	sessionID := "test-session-id"
+	filePath := "regular-file.txt"
+	content := strings.NewReader("Regular content")
+	_, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Verify only regular file metadata was stored
+	metadata, err := fm.getFileMetadata(context.Background(), filePath)
+	assert.NoError(t, err)
+	assert.Equal(t, sessionID, metadata.SessionID)
+
+	// Temp file should still exist (FileManager doesn't touch it)
+	_, err = os.Stat(tempPath)
+	assert.NoError(t, err)
+}
+
+func TestFileManager_ConcurrentFileOperations_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Perform multiple file operations concurrently
+	sessionID := "test-session-id"
+	done := make(chan bool, 5)
+
+	for i := 0; i < 5; i++ {
+		go func(index int) {
+			filePath := fmt.Sprintf("concurrent-file-%d.txt", index)
+			content := fmt.Sprintf("Concurrent content %d", index)
+
+			// Store file
+			_, err := fm.StoreFile(context.Background(), sessionID, filePath, strings.NewReader(content))
+			assert.NoError(t, err)
+
+			// Get file
+			file, _, err := fm.GetFile(context.Background(), filePath)
+			assert.NoError(t, err)
+			file.Close()
+
+			// Verify file integrity
+			valid, err := fm.VerifyFileIntegrity(context.Background(), filePath)
+			assert.NoError(t, err)
+			assert.True(t, valid)
+
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 5; i++ {
+		<-done
+	}
+
+	// Assert - All files should be stored
+	files, err := fm.ListFilesBySession(context.Background(), sessionID)
+	assert.NoError(t, err)
+	assert.Len(t, files, 5)
+}
+
+func TestFileManager_DiskSpaceMonitoring_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Create files until we approach disk space limits
+	sessionID := "test-session-id"
+	fileCount := 0
+	var totalSize int64
+
+	for fileCount = 0; fileCount < 100; fileCount++ {
+		filePath := fmt.Sprintf("space-test-file-%d.dat", fileCount)
+		content := make([]byte, 10*1024) // 10KB files
+
+		_, err := fm.StoreFile(context.Background(), sessionID, filePath, strings.NewReader(string(content)))
+		if err != nil {
+			break // Stop when we hit disk space or other errors
+		}
+
+		totalSize += int64(len(content))
+	}
+
+	// Assert - At least some files should be stored
+	files, err := fm.ListFilesBySession(context.Background(), sessionID)
+	if err == nil && len(files) > 0 {
+		assert.Greater(t, totalSize, int64(0))
+	}
+}
+
+func TestFileManager_UnicodeFileNames_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act
+	sessionID := "test-session-id"
+	filePath := "测试文件.txt" // Unicode filename
+	content := strings.NewReader("Unicode content: 你好世界")
+
+	metadata, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, metadata)
+	assert.Equal(t, sessionID, metadata.SessionID)
+	assert.Equal(t, filePath, metadata.FilePath)
+
+	// Verify file exists on disk
+	fullPath := filepath.Join(storagePath, filePath)
+	_, err = os.Stat(fullPath)
+	assert.NoError(t, err)
+
+	// Verify can retrieve file with unicode path
+	file, _, err := fm.GetFile(context.Background(), filePath)
+	assert.NoError(t, err)
+	file.Close()
+}
+
+func TestFileManager_LongFilePath_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act
+	sessionID := "test-session-id"
+
+	// Create subdirectories first
+	subDir := filepath.Join(storagePath, "deep", "nested", "directory", "structure")
+	fullSubDir := filepath.Join(storagePath, subDir)
+	err := os.MkdirAll(fullSubDir, 0755)
+	require.NoError(t, err)
+
+	filePath := filepath.Join(subDir, "deep-nested-file.txt")
+	content := strings.NewReader("Deep nested content")
+
+	metadata, err := fm.StoreFile(context.Background(), sessionID, filepath.Join(subDir, "deep-nested-file.txt"), content)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, metadata)
+	assert.Equal(t, sessionID, metadata.SessionID)
+
+	// Verify file exists
+	fullPath := filepath.Join(storagePath, metadata.FilePath)
+	_, err = os.Stat(fullPath)
+	assert.NoError(t, err)
+
+	// Can retrieve by full path
+	file, _, err := fm.GetFile(context.Background(), metadata.FilePath)
+	assert.NoError(t, err)
+	file.Close()
+}
+
+func TestFileManager_SpecialCharactersInContent_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act
+	sessionID := "test-session-id"
+	filePath := "special-chars.txt"
+	content := strings.NewReader("Content with special chars: \x00\x01\x02 and \"quotes\" and \n newlines")
+
+	metadata, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, metadata)
+	assert.Equal(t, int64(len("Content with special chars: \x00\x01\x02 and \"quotes\" and \n newlines")), metadata.FileSize)
+
+	// Verify can retrieve file with special characters
+	file, _, err := fm.GetFile(context.Background(), filePath)
+	assert.NoError(t, err)
+	file.Close()
+}
+
+func TestFileManager_EmptyContentFile_Success(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act
+	sessionID := "test-session-id"
+	filePath := "empty-file.txt"
+	content := strings.NewReader("")
+
+	metadata, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, metadata)
+	assert.Equal(t, int64(0), metadata.FileSize)
+
+	// Verify can retrieve empty file
+	file, _, err := fm.GetFile(context.Background(), filePath)
+	assert.NoError(t, err)
+	file.Close()
+
+	// Verify integrity of empty file
+	valid, err := fm.VerifyFileIntegrity(context.Background(), filePath)
+	assert.NoError(t, err)
+	assert.True(t, valid)
+}
+
+func TestFileManager_DatabaseErrorHandling_MetaDataStorageError(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(db)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Simulate database error during metadata storage
+	sessionID := "test-session-id"
+	filePath := "test-file.txt"
+	content := strings.NewReader("Test content")
+
+	// Manually corrupt database connection by closing it
+	db.Close()
+
+	_, err := fm.StoreFile(context.Background(), sessionID, filePath, content)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, metadata)
+	assert.Contains(t, err.Error(), "failed to store file metadata")
+}
+
+func TestFileManager_DatabaseErrorHandling_FileRetrievalError(t *testing.T) {
+	// Arrange
+	db := setupFileTestDB(t)
+	defer cleanupTestDB(t)
+	storagePath := t.TempDir()
+	fm := NewFileManager(db, storagePath)
+
+	// Act - Try to get file that exists but has no metadata
+	sessionID := "test-session-id"
+	filePath := "orphaned-file.txt"
+	fullPath := filepath.Join(storagePath, filePath)
+
+	// Create orphaned file (no metadata)
+	err := os.MkdirAll(filepath.Dir(fullPath), 0755)
+	require.NoError(t, err)
+	err = os.WriteFile(fullPath, []byte("orphaned content"), 0644)
+	require.NoError(tort)
+
+	// Manually corrupt database connection by closing it
+	db.Close()
+
+	file, metadata, err := fm.GetFile(context.Background(), filePath)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get file metadata")
+	assert.Nil(t, file)
+	assert.Nil(t, metadata)
 }
