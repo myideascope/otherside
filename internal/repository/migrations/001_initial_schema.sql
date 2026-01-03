@@ -1,5 +1,4 @@
 -- Database schema for OtherSide Paranormal Investigation Application
--- Migration: 001_initial_schema
 
 -- Sessions table - stores investigation sessions
 CREATE TABLE IF NOT EXISTS sessions (
