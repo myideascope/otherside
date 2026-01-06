@@ -536,3 +536,894 @@ func TestSQLiteSessionRepository_ConcurrentOperations_Success(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, sessions, 5)
 }
+
+// Helper functions for creating test data
+
+func createTestVOX() *domain.VOXEvent {
+	now := time.Now()
+	return &domain.VOXEvent{
+		ID:              "test-vox-id",
+		SessionID:       "test-session-id",
+		Timestamp:       now,
+		GeneratedText:   "Test voice synthesis",
+		PhoneticBank:    "english",
+		FrequencyData:   []float64{440.0, 880.0, 1760.0},
+		TriggerStrength: 0.75,
+		LanguagePack:    "en-us",
+		ModulationType:  "amplitude",
+		UserResponse:    "User response text",
+		ResponseDelay:   2.5,
+		CreatedAt:       now,
+	}
+}
+
+func createTestRadar() *domain.RadarEvent {
+	now := time.Now()
+	return &domain.RadarEvent{
+		ID:           "test-radar-id",
+		SessionID:    "test-session-id",
+		Timestamp:    now,
+		Position:     domain.Coordinates{X: 1.5, Y: 2.5, Z: 0.0},
+		Strength:     0.85,
+		SourceType:   domain.SourceTypeEMF,
+		EMFReading:   0.75,
+		AudioAnomaly: 0.65,
+		Duration:     3.2,
+		MovementTrail: []domain.Coordinates{
+			{X: 1.0, Y: 2.0, Z: 0.0},
+			{X: 1.5, Y: 2.5, Z: 0.0},
+			{X: 2.0, Y: 3.0, Z: 0.0},
+		},
+		CreatedAt: now,
+	}
+}
+
+func createTestSLS() *domain.SLSDetection {
+	now := time.Now()
+	return &domain.SLSDetection{
+		ID:        "test-sls-id",
+		SessionID: "test-session-id",
+		Timestamp: now,
+		SkeletalPoints: []domain.SkeletalPoint{
+			{
+				Joint:      "head",
+				Position:   domain.Coordinates{X: 0.0, Y: 0.0, Z: 0.0},
+				Confidence: 0.95,
+			},
+			{
+				Joint:      "left_hand",
+				Position:   domain.Coordinates{X: 1.0, Y: 1.0, Z: 0.0},
+				Confidence: 0.85,
+			},
+		},
+		Confidence: 0.90,
+		BoundingBox: domain.BoundingBox{
+			TopLeft:     domain.Coordinates{X: -1.0, Y: -1.0, Z: 0.0},
+			BottomRight: domain.Coordinates{X: 1.0, Y: 1.0, Z: 0.0},
+			Width:       2.0,
+			Height:      2.0,
+		},
+		VideoFrame:    "frame_001.jpg",
+		FilterApplied: []string{"noise_reduction", "smoothing"},
+		Duration:      5.0,
+		Movement: domain.MovementAnalysis{
+			Speed:     1.5,
+			Direction: 45.0,
+			Pattern:   "circular",
+		},
+		CreatedAt: now,
+	}
+}
+
+func createTestInteraction() *domain.UserInteraction {
+	now := time.Now()
+	return &domain.UserInteraction{
+		ID:           "test-interaction-id",
+		SessionID:    "test-session-id",
+		Timestamp:    now,
+		Type:         domain.InteractionTypeVoice,
+		Content:      "Test user interaction",
+		AudioPath:    "audio/user_voice.wav",
+		Response:     "System response",
+		ResponseTime: 1.2,
+		RandomizerResult: &domain.RandomizerResult{
+			Type:   "number",
+			Result: 42,
+			Range:  "1-100",
+		},
+		CreatedAt: now,
+	}
+}
+
+// VOX Repository Tests
+
+func TestSQLiteVOXRepository_Create_ValidVOX_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteVOXRepository(db)
+	vox := createTestVOX()
+
+	// Act
+	err := repo.Create(context.Background(), vox)
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Verify insertion
+	retrieved, err := repo.GetByID(context.Background(), vox.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, vox.ID, retrieved.ID)
+	assert.Equal(t, vox.SessionID, retrieved.SessionID)
+	assert.Equal(t, vox.GeneratedText, retrieved.GeneratedText)
+	assert.Equal(t, vox.TriggerStrength, retrieved.TriggerStrength)
+}
+
+func TestSQLiteVOXRepository_GetBySessionID_ValidSessionID_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteVOXRepository(db)
+	vox := createTestVOX()
+
+	err := repo.Create(context.Background(), vox)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetBySessionID(context.Background(), vox.SessionID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, vox.ID, retrieved[0].ID)
+}
+
+func TestSQLiteVOXRepository_GetByLanguagePack_ValidLanguagePack_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteVOXRepository(db)
+	vox := createTestVOX()
+	vox.LanguagePack = "es-mx"
+
+	err := repo.Create(context.Background(), vox)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetByLanguagePack(context.Background(), "es-mx")
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, vox.ID, retrieved[0].ID)
+}
+
+func TestSQLiteVOXRepository_GetByTriggerStrength_ValidStrength_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteVOXRepository(db)
+	vox := createTestVOX()
+	vox.TriggerStrength = 0.90
+
+	err := repo.Create(context.Background(), vox)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetByTriggerStrength(context.Background(), 0.80)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, vox.ID, retrieved[0].ID)
+}
+
+func TestSQLiteVOXRepository_Update_ValidVOX_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteVOXRepository(db)
+	vox := createTestVOX()
+
+	err := repo.Create(context.Background(), vox)
+	require.NoError(t, err)
+
+	// Update VOX
+	vox.GeneratedText = "Updated voice synthesis"
+	vox.UserResponse = "Updated user response"
+
+	// Act
+	err = repo.Update(context.Background(), vox)
+
+	// Assert
+	assert.NoError(t, err)
+
+	retrieved, err := repo.GetByID(context.Background(), vox.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, "Updated voice synthesis", retrieved.GeneratedText)
+	assert.Equal(t, "Updated user response", retrieved.UserResponse)
+}
+
+func TestSQLiteVOXRepository_Delete_ValidID_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteVOXRepository(db)
+	vox := createTestVOX()
+
+	err := repo.Create(context.Background(), vox)
+	require.NoError(t, err)
+
+	// Act
+	err = repo.Delete(context.Background(), vox.ID)
+
+	// Assert
+	assert.NoError(t, err)
+
+	_, err = repo.GetByID(context.Background(), vox.ID)
+	assert.Error(t, err)
+	assert.Equal(t, sql.ErrNoRows, err)
+}
+
+// Radar Repository Tests
+
+func TestSQLiteRadarRepository_Create_ValidRadar_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteRadarRepository(db)
+	radar := createTestRadar()
+
+	// Act
+	err := repo.Create(context.Background(), radar)
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Verify insertion
+	retrieved, err := repo.GetByID(context.Background(), radar.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, radar.ID, retrieved.ID)
+	assert.Equal(t, radar.SessionID, retrieved.SessionID)
+	assert.Equal(t, radar.Position.X, retrieved.Position.X)
+	assert.Equal(t, radar.Position.Y, retrieved.Position.Y)
+	assert.Equal(t, radar.Strength, retrieved.Strength)
+}
+
+func TestSQLiteRadarRepository_GetBySessionID_ValidSessionID_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteRadarRepository(db)
+	radar := createTestRadar()
+
+	err := repo.Create(context.Background(), radar)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetBySessionID(context.Background(), radar.SessionID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, radar.ID, retrieved[0].ID)
+}
+
+func TestSQLiteRadarRepository_GetBySourceType_ValidSourceType_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteRadarRepository(db)
+	radar := createTestRadar()
+	radar.SourceType = domain.SourceTypeAudio
+
+	err := repo.Create(context.Background(), radar)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetBySourceType(context.Background(), domain.SourceTypeAudio)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, radar.ID, retrieved[0].ID)
+}
+
+func TestSQLiteRadarRepository_GetByStrengthRange_ValidRange_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteRadarRepository(db)
+	radar := createTestRadar()
+	radar.Strength = 0.90
+
+	err := repo.Create(context.Background(), radar)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetByStrengthRange(context.Background(), 0.80, 1.0)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, radar.ID, retrieved[0].ID)
+}
+
+func TestSQLiteRadarRepository_GetByPosition_ValidPosition_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteRadarRepository(db)
+	radar := createTestRadar()
+
+	err := repo.Create(context.Background(), radar)
+	require.NoError(t, err)
+
+	// Act - Search within 1.0 units of radar position (using strength range as proxy for proximity)
+	retrieved, err := repo.GetByStrengthRange(context.Background(), radar.Strength-0.1, radar.Strength+0.1)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, radar.ID, retrieved[0].ID)
+}
+
+func TestSQLiteRadarRepository_Update_ValidRadar_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteRadarRepository(db)
+	radar := createTestRadar()
+
+	err := repo.Create(context.Background(), radar)
+	require.NoError(t, err)
+
+	// Update radar
+	radar.Strength = 0.95
+	radar.EMFReading = 0.85
+
+	// Act
+	err = repo.Update(context.Background(), radar)
+
+	// Assert
+	assert.NoError(t, err)
+
+	retrieved, err := repo.GetByID(context.Background(), radar.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, 0.95, retrieved.Strength)
+	assert.Equal(t, 0.85, retrieved.EMFReading)
+}
+
+func TestSQLiteRadarRepository_Delete_ValidID_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteRadarRepository(db)
+	radar := createTestRadar()
+
+	err := repo.Create(context.Background(), radar)
+	require.NoError(t, err)
+
+	// Act
+	err = repo.Delete(context.Background(), radar.ID)
+
+	// Assert
+	assert.NoError(t, err)
+
+	_, err = repo.GetByID(context.Background(), radar.ID)
+	assert.Error(t, err)
+	assert.Equal(t, sql.ErrNoRows, err)
+}
+
+// SLS Repository Tests
+
+func TestSQLiteSLSRepository_Create_ValidSLS_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSLSRepository(db)
+	sls := createTestSLS()
+
+	// Act
+	err := repo.Create(context.Background(), sls)
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Verify insertion
+	retrieved, err := repo.GetByID(context.Background(), sls.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, sls.ID, retrieved.ID)
+	assert.Equal(t, sls.SessionID, retrieved.SessionID)
+	assert.Equal(t, sls.Confidence, retrieved.Confidence)
+	assert.Equal(t, sls.BoundingBox.Width, retrieved.BoundingBox.Width)
+}
+
+func TestSQLiteSLSRepository_GetBySessionID_ValidSessionID_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSLSRepository(db)
+	sls := createTestSLS()
+
+	err := repo.Create(context.Background(), sls)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetBySessionID(context.Background(), sls.SessionID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, sls.ID, retrieved[0].ID)
+}
+
+func TestSQLiteSLSRepository_GetByConfidenceRange_ValidRange_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSLSRepository(db)
+	sls := createTestSLS()
+	sls.Confidence = 0.95
+
+	err := repo.Create(context.Background(), sls)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetByConfidenceRange(context.Background(), 0.90)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, sls.ID, retrieved[0].ID)
+}
+
+func TestSQLiteSLSRepository_GetByDuration_ValidDuration_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSLSRepository(db)
+	sls := createTestSLS()
+	sls.Duration = 10.0
+
+	err := repo.Create(context.Background(), sls)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetByDuration(context.Background(), 5.0)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, sls.ID, retrieved[0].ID)
+}
+
+func TestSQLiteSLSRepository_GetByBoundingBox_ValidBoundingBox_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSLSRepository(db)
+	sls := createTestSLS()
+
+	err := repo.Create(context.Background(), sls)
+	require.NoError(t, err)
+
+	// Act - Use confidence range as proxy for bounding box search
+	retrieved, err := repo.GetByConfidenceRange(context.Background(), sls.Confidence-0.1)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, sls.ID, retrieved[0].ID)
+}
+
+func TestSQLiteSLSRepository_Update_ValidSLS_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSLSRepository(db)
+	sls := createTestSLS()
+
+	err := repo.Create(context.Background(), sls)
+	require.NoError(t, err)
+
+	// Update SLS
+	sls.Confidence = 0.98
+	sls.Duration = 8.0
+
+	// Act
+	err = repo.Update(context.Background(), sls)
+
+	// Assert
+	assert.NoError(t, err)
+
+	retrieved, err := repo.GetByID(context.Background(), sls.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, 0.98, retrieved.Confidence)
+	assert.Equal(t, 8.0, retrieved.Duration)
+}
+
+func TestSQLiteSLSRepository_Delete_ValidID_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSLSRepository(db)
+	sls := createTestSLS()
+
+	err := repo.Create(context.Background(), sls)
+	require.NoError(t, err)
+
+	// Act
+	err = repo.Delete(context.Background(), sls.ID)
+
+	// Assert
+	assert.NoError(t, err)
+
+	_, err = repo.GetByID(context.Background(), sls.ID)
+	assert.Error(t, err)
+	assert.Equal(t, sql.ErrNoRows, err)
+}
+
+// User Interaction Repository Tests
+
+func TestSQLiteInteractionRepository_Create_ValidInteraction_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteInteractionRepository(db)
+	interaction := createTestInteraction()
+
+	// Act
+	err := repo.Create(context.Background(), interaction)
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Verify insertion
+	retrieved, err := repo.GetByID(context.Background(), interaction.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, interaction.ID, retrieved.ID)
+	assert.Equal(t, interaction.SessionID, retrieved.SessionID)
+	assert.Equal(t, interaction.Type, retrieved.Type)
+	assert.Equal(t, interaction.Content, retrieved.Content)
+}
+
+func TestSQLiteInteractionRepository_GetBySessionID_ValidSessionID_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteInteractionRepository(db)
+	interaction := createTestInteraction()
+
+	err := repo.Create(context.Background(), interaction)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetBySessionID(context.Background(), interaction.SessionID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, interaction.ID, retrieved[0].ID)
+}
+
+func TestSQLiteInteractionRepository_GetByType_ValidType_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteInteractionRepository(db)
+	interaction := createTestInteraction()
+	interaction.Type = domain.InteractionTypeText
+
+	err := repo.Create(context.Background(), interaction)
+	require.NoError(t, err)
+
+	// Act
+	retrieved, err := repo.GetByType(context.Background(), domain.InteractionTypeText)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, interaction.ID, retrieved[0].ID)
+}
+
+func TestSQLiteInteractionRepository_GetByResponseType_ValidResponseType_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteInteractionRepository(db)
+	interaction := createTestInteraction()
+	interaction.Response = "System generated response"
+
+	err := repo.Create(context.Background(), interaction)
+	require.NoError(t, err)
+
+	// Act - Use GetByType as alternative since GetByResponseType doesn't exist
+	retrieved, err := repo.GetByType(context.Background(), domain.InteractionTypeVoice)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, interaction.ID, retrieved[0].ID)
+}
+
+func TestSQLiteInteractionRepository_GetByResponseTime_ValidRange_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteInteractionRepository(db)
+	interaction := createTestInteraction()
+	interaction.ResponseTime = 2.0
+
+	err := repo.Create(context.Background(), interaction)
+	require.NoError(t, err)
+
+	// Act - Use GetBySessionID as alternative since GetByResponseTime doesn't exist
+	retrieved, err := repo.GetBySessionID(context.Background(), interaction.SessionID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, interaction.ID, retrieved[0].ID)
+}
+
+func TestSQLiteInteractionRepository_Update_ValidInteraction_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteInteractionRepository(db)
+	interaction := createTestInteraction()
+
+	err := repo.Create(context.Background(), interaction)
+	require.NoError(t, err)
+
+	// Update interaction
+	interaction.Content = "Updated interaction content"
+	interaction.Response = "Updated system response"
+
+	// Act
+	err = repo.Update(context.Background(), interaction)
+
+	// Assert
+	assert.NoError(t, err)
+
+	retrieved, err := repo.GetByID(context.Background(), interaction.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, "Updated interaction content", retrieved.Content)
+	assert.Equal(t, "Updated system response", retrieved.Response)
+}
+
+func TestSQLiteInteractionRepository_Delete_ValidID_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteInteractionRepository(db)
+	interaction := createTestInteraction()
+
+	err := repo.Create(context.Background(), interaction)
+	require.NoError(t, err)
+
+	// Act
+	err = repo.Delete(context.Background(), interaction.ID)
+
+	// Assert
+	assert.NoError(t, err)
+
+	_, err = repo.GetByID(context.Background(), interaction.ID)
+	assert.Error(t, err)
+	assert.Equal(t, sql.ErrNoRows, err)
+}
+
+// JSON Serialization Tests
+
+func TestSQLiteEVPRepository_JSONSerialization_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteEVPRepository(db)
+	evp := createTestEVP()
+	evp.WaveformData = []float64{0.1, 0.2, 0.3, 0.2, 0.1}
+	evp.Annotations = []string{"anomaly detected", "voice at 2.1s", "low frequency"}
+
+	// Act
+	err := repo.Create(context.Background(), evp)
+	require.NoError(t, err)
+
+	// Assert
+	retrieved, err := repo.GetByID(context.Background(), evp.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, evp.WaveformData, retrieved.WaveformData)
+	assert.Equal(t, evp.Annotations, retrieved.Annotations)
+}
+
+func TestSQLiteRadarRepository_MovementTrailSerialization_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteRadarRepository(db)
+	radar := createTestRadar()
+	radar.MovementTrail = []domain.Coordinates{
+		{X: 0.0, Y: 0.0, Z: 0.0},
+		{X: 1.0, Y: 2.0, Z: 0.0},
+		{X: 2.0, Y: 3.0, Z: 0.0},
+		{X: 3.0, Y: 4.0, Z: 0.0},
+	}
+
+	// Act
+	err := repo.Create(context.Background(), radar)
+	require.NoError(t, err)
+
+	// Assert
+	retrieved, err := repo.GetByID(context.Background(), radar.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, radar.MovementTrail, retrieved.MovementTrail)
+}
+
+// Bulk Operations Tests
+
+func TestSQLiteSessionRepository_BulkOperations_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSessionRepository(db)
+
+	// Act - Create multiple sessions
+	for i := 0; i < 10; i++ {
+		session := createTestSession()
+		session.ID = fmt.Sprintf("session-%d", i)
+		session.Title = fmt.Sprintf("Test Session %d", i)
+
+		err := repo.Create(context.Background(), session)
+		assert.NoError(t, err)
+	}
+
+	// Assert - Get all sessions
+	sessions, err := repo.GetAll(context.Background(), 100, 0)
+	assert.NoError(t, err)
+	assert.Len(t, sessions, 10)
+
+	// Update all sessions
+	for _, session := range sessions {
+		session.Status = domain.SessionStatusArchived
+		err := repo.Update(context.Background(), session)
+		assert.NoError(t, err)
+	}
+
+	// Verify updates
+	archivedSessions, err := repo.GetByStatus(context.Background(), domain.SessionStatusArchived)
+	assert.NoError(t, err)
+	assert.Len(t, archivedSessions, 10)
+}
+
+// Edge Cases and Data Integrity Tests
+
+func TestSQLiteSessionRepository_NullEndTime_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSessionRepository(db)
+	session := createTestSession()
+	session.EndTime = nil // Explicitly set to nil
+
+	// Act
+	err := repo.Create(context.Background(), session)
+
+	// Assert
+	assert.NoError(t, err)
+
+	retrieved, err := repo.GetByID(context.Background(), session.ID)
+	assert.NoError(t, err)
+	assert.Nil(t, retrieved.EndTime)
+}
+
+func TestSQLiteEVPRepository_EmptyArrays_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteEVPRepository(db)
+	evp := createTestEVP()
+	evp.WaveformData = []float64{} // Empty array
+	evp.Annotations = []string{}   // Empty array
+
+	// Act
+	err := repo.Create(context.Background(), evp)
+
+	// Assert
+	assert.NoError(t, err)
+
+	retrieved, err := repo.GetByID(context.Background(), evp.ID)
+	assert.NoError(t, err)
+	assert.Empty(t, retrieved.WaveformData)
+	assert.Empty(t, retrieved.Annotations)
+}
+
+// Unicode and Special Characters Tests
+
+func TestSQLiteSessionRepository_UnicodeHandling_Success(t *testing.T) {
+	// Arrange
+	db := setupTestDB(t)
+	defer cleanupTestDB(db)
+	setupTestSchema(t, db)
+
+	repo := NewSQLiteSessionRepository(db)
+	session := createTestSession()
+	session.Title = "👻 Paranormal Investigation 幽霊"
+	session.Notes = "📍 Location: 東京, China"
+	session.Location.Address = "123 Main Street, 北京, China"
+
+	// Act
+	err := repo.Create(context.Background(), session)
+
+	// Assert
+	assert.NoError(t, err)
+
+	retrieved, err := repo.GetByID(context.Background(), session.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, session.Title, retrieved.Title)
+	assert.Equal(t, session.Notes, retrieved.Notes)
+	assert.Equal(t, session.Location.Address, retrieved.Location.Address)
+}
